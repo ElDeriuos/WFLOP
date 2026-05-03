@@ -1,0 +1,6 @@
+{
+    "fortran.linter.extraArgs": [
+        "-ffixed-form",
+        "-ffree-form"
+    ]
+}
