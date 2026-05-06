@@ -32,6 +32,9 @@ class WindFarmGUI:
         self.num_threads = tk.StringVar(value="0")
         self.workability = tk.StringVar(value="0.65")
 
+        self.opt_mode = tk.StringVar(value="2")     # Default to Multi-Objective (2)
+        self.obj_target = tk.StringVar(value="1")   # Default to AEP (1)
+
         # --- Variables for Pre-Processing ---
         self.dx = tk.StringVar(value="10000.0")
         self.dy = tk.StringVar(value="10000.0")
@@ -215,6 +218,24 @@ class WindFarmGUI:
         # --- 1. Parameters Frame ---
         param_frame = ttk.Labelframe(self.main_frame, text="Optimization Parameters", padding=10)
         param_frame.pack(fill="x", padx=10, pady=10)
+
+        # --- NEW: Optimization Mode Selection ---
+        ttk.Separator(param_frame, orient="horizontal").grid(row=9, column=0, columnspan=2, sticky="ew", pady=10)
+        
+        ttk.Label(param_frame, text="Optimization Mode:", font=("Arial", 10, "bold")).grid(row=10, column=0, sticky="w", pady=2)
+        
+        # Mode Selection
+        mode_frame = ttk.Frame(param_frame)
+        mode_frame.grid(row=10, column=1, sticky="e")
+        ttk.Radiobutton(mode_frame, text="Multi-Objective (NSGA-II)", variable=self.opt_mode, value="2").pack(side="left", padx=5)
+        ttk.Radiobutton(mode_frame, text="Single-Objective (SOGA)", variable=self.opt_mode, value="1").pack(side="left", padx=5)
+
+        # Target Selection (For SOGA)
+        ttk.Label(param_frame, text="SOGA Target:").grid(row=11, column=0, sticky="w", pady=2)
+        target_cb = ttk.Combobox(param_frame, textvariable=self.obj_target, state="readonly", width=13)
+        target_cb['values'] = ("1 - Maximize AEP")
+        target_cb.current(0)  # Set default to AEP
+        target_cb.grid(row=11, column=1, sticky="e", pady=2)
         
         self.create_input_row(param_frame, "Max Generations (it_max):", self.it_max, 0)
         self.create_input_row(param_frame, "Population Size (n_pop):", self.n_pop, 1)
@@ -307,7 +328,10 @@ class WindFarmGUI:
             f.write(f"{self.mu.get()}       ! mu\n")
             f.write(f"{self.max_turbs.get()}       ! max_turbs\n")
             f.write(f"{self.min_turbs.get()}       ! min_turbs\n")
-            f.write(f"{self.workability.get()}     ! workability probability")
+            f.write(f"{self.workability.get()}     ! workability probability\n")
+            # --- NEW SOGA Variables ---
+            f.write(f"{self.opt_mode.get()}        ! opt_mode (1=SOGA, 2=NSGA-II)\n")
+            f.write(f"{self.obj_target.get().split(' ')[0]}      ! obj_target (1=AEP)")
 
     def start_optimization(self):
         """Starts the Fortran engine in a background thread."""
