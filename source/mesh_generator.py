@@ -4,6 +4,7 @@ import numpy as np
 import subprocess
 from pyproj import Transformer
 import json
+import stat
 
 def calculate_polygon_area(x, y):
     """Calculates polygon area using the Shoelace formula."""
@@ -123,11 +124,19 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
             f.write(f"{'./inputs/windfarm_1.plt':<80}\n")
             f.write(f"{'windfarm_2.plt':<80}\n")
 
+
+    binary_path = './source/polygon3' 
+    
+    # Give the file executable permissions for the user
+    if os.path.exists(binary_path):
+        st = os.stat(binary_path)
+        os.chmod(binary_path, st.st_mode | stat.S_IEXEC)
+
     # 6. Execute polygon3 and Cleanup
     output_callback("Executing polygon3 mesh generator natively in WSL...")
     try:
         process = subprocess.run(
-            ["./source/polygon3"], 
+            [binary_path], 
             check=True, 
             capture_output=True, 
             text=True

@@ -321,18 +321,26 @@ class WindFarmGUI:
         thread.start()
 
     def run_fortran_process(self):
-        """Executes the Linux binary via WSL and captures the output."""
+        """Executes the compiled binary natively based on the OS and captures output."""
         try:
-            # Prepare the OpenMP thread command
             threads = self.num_threads.get()
+            is_windows = sys.platform == "win32"
+            
+            exe_name = "wfo.exe" if is_windows else "./wfo"
+            
+            # Format the OpenMP command based on the operating system
             if threads == "0" or not threads.isdigit():
-                run_cmd = "./wfo_fast" # Let OpenMP decide (uses all cores)
+                run_cmd = exe_name 
             else:
-                run_cmd = f"export OMP_NUM_THREADS={threads} && ./wfo_fast"
+                if is_windows:
+                    run_cmd = f"set OMP_NUM_THREADS={threads} & {exe_name}"
+                else:
+                    run_cmd = f"export OMP_NUM_THREADS={threads} && {exe_name}"
 
-            # We call 'wsl' directly from Windows. It automatically maps the directory.
+            # Execute the command natively
             process = subprocess.Popen(
-                ["wsl.exe", "bash", "-c", run_cmd], 
+                run_cmd, 
+                shell=True,
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.STDOUT, 
                 text=True,
@@ -352,6 +360,7 @@ class WindFarmGUI:
             self.root.after(0, self.log, f"ERROR: {str(e)}")
         finally:
             self.root.after(0, lambda: self.btn_run.config(state="normal"))
+
 
     def enable_viz_buttons(self):
         self.btn_pareto.config(state="normal")
@@ -497,13 +506,19 @@ class WindFarmGUI:
         def safe_log(msg):
             self.root.after(0, self.log, msg)
 
-        # Notice we only pass the asc_file and the callback now
-        success = bathymetry_generator.process_bathymetry(
-            self.asc_file, 
-            output_callback=safe_log
-        )
-        
-        self.root.after(0, lambda: self.btn_bathy.config(state="normal"))
+        try:
+            # Notice we only pass the asc_file and the callback now
+            success = bathymetry_generator.process_bathymetry(
+                self.asc_file, 
+                output_callback=safe_log
+            )
+        except Exception as e:
+            # THIS will catch silent crashes and print them to the GUI!
+            import traceback
+            safe_log(f"🔴 PYTHON CRASH: {str(e)}")
+            safe_log(traceback.format_exc())
+        finally:
+            self.root.after(0, lambda: self.btn_bathy.config(state="normal"))
 
     def create_filter_pair(self, parent, var_start, var_end, values, row, col_start):
         """Helper to create two comboboxes for Start and End ranges."""
@@ -584,34 +599,33 @@ class WindFarmGUI:
     def compile_fast(self):
         """Compiles the Fortran code with maximum optimization (-O3)."""
         self.log("Compiling Fortran (Fast Mode)... please wait.")
-        # self.btn_compile_fast.config(state="disabled")
-        # self.btn_compile_debug.config(state="disabled")
         
-        cmd = ("gfortran -O3 -march=native -ffast-math -flto -fopenmp "
-               "mod_precision.f90 mod_types.f90 mod_io.f90 mod_costs.f90 mod_physics.f90 mod_NSGA_II.f90 main.f90 "
-               "-o wfo_fast")
+        # Determine the correct executable name based on the OS
+        exe_name = "wfo.exe" if sys.platform == "win32" else "wfo"
+        
+        cmd = (f"gfortran -O3 -march=native -ffast-math -flto -fopenmp "
+               f"WFLOP.f90 -o {exe_name}")
         
         threading.Thread(target=self._run_compiler, args=(cmd,), daemon=True).start()
 
     def compile_debug(self):
         """Compiles the Fortran code with full bounds checking and backtraces (-g)."""
         self.log("Compiling Fortran (Debug Mode)... please wait.")
-        # self.btn_compile_fast.config(state="disabled")
-        # self.btn_compile_debug.config(state="disabled")
         
-        # INSERTED: mod_kikuchi_costs.f90
-        cmd = ("gfortran -g -fbacktrace -fcheck=all -Wall -Wextra -Og -fopenmp "
-               "mod_precision.f90 mod_types.f90 mod_io.f90 mod_costs.f90 mod_physics.f90 mod_NSGA_II.f90 main.f90 "
-               "-o wfo_fast")
+        exe_name = "wfo.exe" if sys.platform == "win32" else "wfo"
+        
+        cmd = (f"gfortran -g -fbacktrace -fcheck=all -Wall -Wextra -Og -fopenmp "
+               f"WFLOP.f90 -o {exe_name}")
                
         threading.Thread(target=self._run_compiler, args=(cmd,), daemon=True).start()
 
     def _run_compiler(self, cmd):
         """Background thread worker for compilation."""
-        import subprocess
         try:
+            # shell=True allows us to pass the string directly without WSL wrappers
             process = subprocess.Popen(
-                ["wsl.exe", "bash", "-c", cmd], 
+                cmd, 
+                shell=True,
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.STDOUT, 
                 text=True,
@@ -622,15 +636,12 @@ class WindFarmGUI:
             process.wait()
             
             if process.returncode == 0:
-                self.root.after(0, self.log, "✅ Compilation Successful! Ready to Run.")
+                self.root.after(0, self.log, "Compilation Successful! Ready to Run.")
             else:
-                self.root.after(0, self.log, "🔴 Compilation FAILED. Check errors above.")
+                self.root.after(0, self.log, "Compilation FAILED. Check errors above.")
                 
         except Exception as e:
             self.root.after(0, self.log, f"ERROR: {str(e)}")
-        finally:
-            self.root.after(0, lambda: self.btn_compile_fast.config(state="normal"))
-            self.root.after(0, lambda: self.btn_compile_debug.config(state="normal"))
 
     def select_shoreline(self):
         file_path = filedialog.askopenfilename(title="Select Shoreline KML", filetypes=[("KML Files", "*.kml")])
