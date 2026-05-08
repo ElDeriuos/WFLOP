@@ -1,10 +1,10 @@
-50       ! it_max
-100       ! n_pop
-0.5       ! p_cross
-0.5       ! p_mutation
-0.11       ! mu
-50       ! max_turbs
-1       ! min_turbs
-0.65     ! workability probability
-1        ! opt_mode (1=SOGA, 2=NSGA-II)
-1      ! obj_target (1=AEP)
+30
+30
+0.4
+0.6
+0.08
+50
+10
+0.65
+1
+1

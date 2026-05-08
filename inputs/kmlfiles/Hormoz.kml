@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2" xmlns:kml="http://www.opengis.net/kml/2.2" xmlns:atom="http://www.w3.org/2005/Atom">
+<Document>
+	<name>Hormoz.kml</name>
+	<Style id="inline">
+		<LineStyle>
+			<color>ff0000ff</color>
+			<width>2</width>
+		</LineStyle>
+		<PolyStyle>
+			<fill>0</fill>
+		</PolyStyle>
+	</Style>
+	<StyleMap id="inline0">
+		<Pair>
+			<key>normal</key>
+			<styleUrl>#inline</styleUrl>
+		</Pair>
+		<Pair>
+			<key>highlight</key>
+			<styleUrl>#inline1</styleUrl>
+		</Pair>
+	</StyleMap>
+	<Style id="inline1">
+		<LineStyle>
+			<color>ff0000ff</color>
+			<width>2</width>
+		</LineStyle>
+		<PolyStyle>
+			<fill>0</fill>
+		</PolyStyle>
+	</Style>
+	<Placemark>
+		<name>Hormoz</name>
+		<styleUrl>#inline0</styleUrl>
+		<Polygon>
+			<tessellate>1</tessellate>
+			<outerBoundaryIs>
+				<LinearRing>
+					<coordinates>
+						56.49922032185216,27.07461076921637,0 56.48665663359956,27.08376029499533,0 56.47998323493997,27.09477295956349,0 56.4702546811195,27.09062154922296,0 56.46013539581324,27.09199108560508,0 56.45302926526033,27.1026056008304,0 56.44740851327948,27.09490658311713,0 56.44291147142324,27.08815638964242,0 56.43648899252793,27.08234740724017,0 56.42518514834748,27.07557455837606,0 56.42671927620163,27.0678002481597,0 56.42068816321261,27.05838443284655,0 56.42597732196646,27.04783627503567,0 56.43381931006022,27.04143914883787,0 56.44768855250253,27.03849591548901,0 56.46128402703008,27.03403701425719,0 56.4759977694979,27.03369815549449,0 56.4848330126136,27.04060242237846,0 56.49692536730707,27.04347516246265,0 56.49827257785464,27.05433063853206,0 56.50269591080783,27.06327691050874,0 56.49922032185216,27.07461076921637,0 
+					</coordinates>
+				</LinearRing>
+			</outerBoundaryIs>
+		</Polygon>
+	</Placemark>
+</Document>
+</kml>

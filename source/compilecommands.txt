@@ -1,0 +1,5 @@
+Polygon3.exe :
+gfortran -ffixed-format -fno-automatic -Wall -Wextra -pedantic -g -O0 -fcheck=all -fbacktrace -fopenmp ./polygon3.for -o ./polygon3.exe
+
+polygon3 binary:
+gfortran -ffixed-format -fno-automatic -O3 -fopenmp ./polygon3.for -o ./polygon3

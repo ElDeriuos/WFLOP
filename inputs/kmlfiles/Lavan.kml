@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2" xmlns:kml="http://www.opengis.net/kml/2.2" xmlns:atom="http://www.w3.org/2005/Atom">
+<Document>
+	<name>Lavan.kml</name>
+	<StyleMap id="inline">
+		<Pair>
+			<key>normal</key>
+			<styleUrl>#inline1</styleUrl>
+		</Pair>
+		<Pair>
+			<key>highlight</key>
+			<styleUrl>#inline0</styleUrl>
+		</Pair>
+	</StyleMap>
+	<Style id="inline0">
+		<LineStyle>
+			<color>ff0000ff</color>
+			<width>2</width>
+		</LineStyle>
+		<PolyStyle>
+			<fill>0</fill>
+		</PolyStyle>
+	</Style>
+	<Style id="inline1">
+		<LineStyle>
+			<color>ff0000ff</color>
+			<width>2</width>
+		</LineStyle>
+		<PolyStyle>
+			<fill>0</fill>
+		</PolyStyle>
+	</Style>
+	<Placemark>
+		<name>Lavan</name>
+		<styleUrl>#inline</styleUrl>
+		<Polygon>
+			<tessellate>1</tessellate>
+			<outerBoundaryIs>
+				<LinearRing>
+					<coordinates>
+						53.38581832952446,26.79463868094251,0 53.3667452822871,26.79401285279612,0 53.34803709354635,26.79119895279397,0 53.33575529050606,26.79393932768829,0 53.3166482396811,26.79053917166772,0 53.3002650114805,26.78589918797239,0 53.28731149046122,26.78999805278449,0 53.26289661211233,26.7913118005267,0 53.24353340749046,26.79544872238293,0 53.22635888202359,26.800962492987,0 53.21277140006978,26.80573929631181,0 53.19910732572065,26.81195470859969,0 53.1877616873801,26.81691919673875,0 53.17368215790473,26.82417749806691,0 53.16196229913764,26.83492502957713,0 53.15435173048945,26.84385001546119,0 53.17082846924475,26.85069789869955,0 53.19784073099181,26.84736410906652,0 53.22054548762197,26.83876097070398,0 53.24727132740078,26.83097390504867,0 53.27102516813704,26.82803899657054,0 53.29179952075594,26.82541140533609,0 53.30739287471962,26.82190013751708,0 53.32743996339665,26.82333523866592,0 53.34560081871228,26.82177756067508,0 53.3649217735071,26.81594037344363,0 53.38718881012025,26.80467479916926,0 53.38581832952446,26.79463868094251,0 
+					</coordinates>
+				</LinearRing>
+			</outerBoundaryIs>
+		</Polygon>
+	</Placemark>
+</Document>
+</kml>

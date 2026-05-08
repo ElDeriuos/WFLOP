@@ -799,7 +799,7 @@ CONTAINS
 
 END MODULE costs
 
-MODULE physics
+MODULE power
 
     USE precision, ONLY: wp
     USE types,     ONLY: SiteData, TurbineSpec, Individual, ConfigData
@@ -1211,13 +1211,13 @@ CONTAINS
         END DO
     END FUNCTION get_coeff
 
-END MODULE physics
+END MODULE power
 
 MODULE NSGA_II
 
     USE precision, ONLY: wp
     USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Individual, Population
-    USE physics,   ONLY: evaluate_aep
+    USE power,     ONLY: evaluate_aep
     USE costs,     ONLY: evaluate_financial_cost
 
     IMPLICIT NONE
@@ -1953,6 +1953,8 @@ MODULE SOGA
     USE precision, ONLY: wp
     USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Individual, Population
     USE NSGA_II,   ONLY: crossover, mutate  ! Reuse physical operators
+    USE power,   ONLY: evaluate_aep
+    USE costs,     ONLY: evaluate_financial_cost
 
     IMPLICIT NONE
     PRIVATE
@@ -2012,9 +2014,8 @@ CONTAINS
     ! SUBROUTINE: soga_assign_fitness
     ! Sorts the population based on the fitness already calculated
     ! ==================================================================
-    SUBROUTINE soga_assign_fitness(pop, config)
+    SUBROUTINE soga_assign_fitness(pop)
         TYPE(Population), INTENT(INOUT) :: pop
-        TYPE(ConfigData), INTENT(IN)    :: config
         INTEGER :: i
 
         ! 1. Fast 1D Insertion Sort based purely on scalar fitness
@@ -2145,7 +2146,7 @@ END MODULE SOGA
 module outputs
     USE precision, ONLY: wp
     USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Population
-    USE physics,   ONLY: calculate_3d_wind_field
+    USE power,   ONLY: calculate_3d_wind_field
     
     implicit none
     PRIVATE
@@ -2154,6 +2155,9 @@ module outputs
     PUBLIC :: save_final_pareto
     PUBLIC :: save_animation_data
     public :: cleanup_memory  
+    PUBLIC :: soga_save_convergence
+    PUBLIC :: soga_save_best_layout
+    PUBLIC :: soga_save_animation_data
 
 contains
 
@@ -2292,7 +2296,7 @@ contains
             
             ! --- Prepare Output File ---
             ! Dynamically name the file based on the objective index
-            WRITE(filename, '("../outputs/animation_data_obj_", I0, ".csv")') obj_idx
+            WRITE(filename, '("./outputs/animation_data_obj_", I0, ".csv")') obj_idx
             
             OPEN(NEWUNIT=f_unit, FILE=TRIM(filename), STATUS='REPLACE', IOSTAT=ios)
             IF (ios /= 0) THEN
@@ -2392,116 +2396,101 @@ contains
         END IF
     END SUBROUTINE free_population
 
+    ! ==================================================================
+    ! SOGA OUTPUT 1: Convergence History
+    ! ==================================================================
+    SUBROUTINE soga_save_convergence(gen_num, pop, filename)
+        INTEGER,          INTENT(IN) :: gen_num
+        TYPE(Population), INTENT(IN) :: pop
+        CHARACTER(LEN=*), INTENT(IN) :: filename
+        INTEGER :: f_unit, ios
 
+        IF (gen_num == 1) THEN
+            OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='REPLACE', IOSTAT=ios)
+            IF (ios /= 0) STOP "🔴 ERROR: Could not create SOGA convergence file."
+            WRITE(f_unit, '(A)') 'generation,best_fitness'
+        ELSE
+            OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', POSITION='APPEND', IOSTAT=ios)
+        END IF
+
+        ! Because soga_assign_fitness sorts the array, index 1 is ALWAYS the absolute best solution.
+        WRITE(f_unit, '(I0,A,F25.5)') gen_num, ',', pop%inds(1)%fitness
+        CLOSE(f_unit)
+    END SUBROUTINE soga_save_convergence
+
+    ! ==================================================================
+    ! SOGA OUTPUT 2: The Champion Layout
+    ! ==================================================================
+    SUBROUTINE soga_save_best_layout(pop, filename)
+        TYPE(Population), INTENT(IN) :: pop
+        CHARACTER(LEN=*), INTENT(IN) :: filename
+        INTEGER :: j, f_unit, ios, n_var
+
+        n_var = SIZE(pop%inds(1)%chromosome)
+        OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='REPLACE', IOSTAT=ios)
+
+        WRITE(f_unit, '(A)', ADVANCE='NO') 'fitness'
+        DO j = 1, n_var
+            WRITE(f_unit, '(A,I0)', ADVANCE='NO') ',gene_', j
+        END DO
+        WRITE(f_unit, *)
+
+        WRITE(f_unit, '(F25.5)', ADVANCE='NO') pop%inds(1)%fitness
+        DO j = 1, n_var
+            WRITE(f_unit, '(A,I0)', ADVANCE='NO') ',', pop%inds(1)%chromosome(j)
+        END DO
+        WRITE(f_unit, *)
+
+        CLOSE(f_unit)
+        PRINT *, "✅ Best SOGA layout saved to: ", TRIM(filename)
+    END SUBROUTINE soga_save_best_layout
+
+    ! ==================================================================
+    ! SOGA OUTPUT 3: Animation Data for the Champion
+    ! ==================================================================
+    SUBROUTINE soga_save_animation_data(pop, site, turbines, config)
+        TYPE(Population),  INTENT(IN) :: pop
+        TYPE(SiteData),    INTENT(IN) :: site
+        TYPE(TurbineSpec), INTENT(IN) :: turbines(:)
+        TYPE(ConfigData),  INTENT(IN) :: config
+        INTEGER :: i, j, t_step, f_unit, ios
+        REAL(wp) :: theta, mag, u_val, v_val
+        REAL(wp), ALLOCATABLE :: ws_out(:,:,:)
+
+        PRINT *, "----------------------------------------------------"
+        PRINT *, "Generating SOGA Animation Data for Best Layout..."
+
+        ! Calculate 3D wind field ONLY for the absolute best individual (Index 1)
+        CALL calculate_3d_wind_field(pop%inds(1), site, turbines, config, ws_out)
+
+        OPEN(NEWUNIT=f_unit, FILE='./outputs/animation_data_soga.csv', STATUS='REPLACE', IOSTAT=ios)
+
+        WRITE(f_unit, '(A)', ADVANCE='NO') 'time,x,y'
+        DO j = 1, site%n_hlevel
+            WRITE(f_unit, '(A,I0,A,I0,A,I0)', ADVANCE='NO') ',u_', j, ',v_', j, ',mag_', j
+        END DO
+        WRITE(f_unit, *) 
+
+        DO t_step = 1, site%nsteps
+            DO i = 1, site%n_nodes
+                WRITE(f_unit, '(I0,A,F12.2,A,F12.2)', ADVANCE='NO') &
+                    t_step, ',', site%x_coord(i), ',', site%y_coord(i)
+                theta = site%wd0_ts(i, t_step)
+                DO j = 1, site%n_hlevel
+                    mag = ws_out(i, j, t_step)
+                    u_val = mag * COS(theta)
+                    v_val = mag * SIN(theta)
+                    WRITE(f_unit, '(A,F10.3,A,F10.3,A,F10.3)', ADVANCE='NO') &
+                        ',', u_val, ',', v_val, ',', mag
+                END DO
+                WRITE(f_unit, *)
+            END DO
+        END DO
+
+        CLOSE(f_unit)
+        DEALLOCATE(ws_out)
+        PRINT *, "    ✅ Saved: ./outputs/animation_data_soga.csv"
+        PRINT *, "----------------------------------------------------"
+    END SUBROUTINE soga_save_animation_data
 
 end module outputs
-
-
-PROGRAM windfarm_optimizer
-
-    ! ------------------------------------------------------------------
-    ! MODULE IMPORTS 
-    ! ------------------------------------------------------------------
-    USE types                         ! Contains our TYPE definitions
-    USE inputs                              ! Reading Files
-    use outputs                            ! Writing files
-    USE physics                       ! Wake models and AEP
-    USE NSGA_II                       ! GA / NSGA-II mechanisms
-    USE SOGA                          ! Single-Objective Genetic Algorithm
-    
-    IMPLICIT NONE
-
-    ! ------------------------------------------------------------------
-    ! VARIABLE DECLARATIONS (Using Modern Derived Types)
-    ! ------------------------------------------------------------------
-    TYPE(ConfigData)    :: config         ! GUI parameters (it_max, n_pop, etc.)
-    TYPE(SiteData)      :: site           ! Mesh, Bathymetry, Wind time-series
-    TYPE(TurbineSpec), ALLOCATABLE :: turbines(:) ! Array of available turbine types
-    
-    TYPE(Population)    :: parent_pop     ! Current generation (Pt)
-    TYPE(Population)    :: offspring_pop  ! New children (Qt)
-    TYPE(Population)    :: combined_pop   ! Merged population (Rt)
-    
-    INTEGER :: generation
-
-    ! ------------------------------------------------------------------
-    ! PHASE 1: INITIALIZATION & SETUP
-    ! ------------------------------------------------------------------
-    PRINT *, "Starting Wind Farm Optimizer (NSGA-II)..."
-    
-    ! 1. Read GUI configurations and setup objectives/wake models
-    CALL read_gui_config('../inputs/config.inp', config)
-    
-    ! 2. Load static data into memory (Mesh, Bathymetry, Wind, Turbines)
-    CALL load_turbines('../inputs/turbine_spec.txt', turbines, site)
-    CALL load_site_data('../inputs/filtered_wind.txt', '../inputs/farm_bathymetry.dat', &
-                        '../inputs/site_distances.txt', site, config)
-
-    ! 3. Generate and evaluate the initial random population (P0)
-    CALL init_random_seed()                     
-    CALL initialize_population(parent_pop, config, site)
-    IF (config%opt_mode == 1) THEN
-        CALL soga_evaluate_population(offspring_pop, site, turbines, config)
-        CALL soga_assign_fitness(parent_pop, config)
-    else        
-        CALL evaluate_population(parent_pop, site, turbines, config)
-        CALL assign_fitness(parent_pop, config)
-    end if
-
-
-    ! ------------------------------------------------------------------
-    ! PHASE 2: MAIN EVOLUTIONARY LOOP
-    ! ------------------------------------------------------------------
-    PRINT *, "Entering evolutionary loop..."
-    
-    DO generation = 1, config%it_max
-        PRINT *, "--- Generation ", generation, " of ", config%it_max, " ---"
-        
-        IF (config%opt_mode == 1) THEN
-            ! ==========================================
-            ! SOGA (SINGLE-OBJECTIVE) ROUTE
-            ! ==========================================
-            CALL soga_create_offspring(parent_pop, offspring_pop, config, turbines)
-            
-            ! Use the hyper-efficient SOGA evaluator!
-            CALL soga_evaluate_population(offspring_pop, site, turbines, config)
-            
-            CALL merge_populations(parent_pop, offspring_pop, combined_pop)
-            CALL soga_assign_fitness(combined_pop, config)
-            CALL soga_select_survivors(combined_pop, parent_pop, config)
-            
-        ELSE
-            ! ==========================================
-            ! NSGA-II (MULTI-OBJECTIVE) ROUTE
-            ! ==========================================
-            CALL create_offspring(parent_pop, offspring_pop, config, turbines)
-            CALL evaluate_population(offspring_pop, site, turbines, config)
-            CALL merge_populations(parent_pop, offspring_pop, combined_pop)
-            CALL assign_fitness(combined_pop, config)
-            CALL select_survivors(combined_pop, parent_pop, config)
-        END IF
-        
-        ! 6. Save tracking data for the GUI (Convergence plotting)
-        CALL save_generational_front(generation, parent_pop, &
-                                 '../outputs/generational_fronts.csv')
-    END DO
-
-    ! ------------------------------------------------------------------
-    ! PHASE 3: POST-PROCESSING & CLEANUP
-    ! ------------------------------------------------------------------
-    PRINT *, "Optimization complete. Saving final outputs..."
-  
-    ! 1. Save the final Pareto front for the GUI 2D/3D viewers
-    PRINT *, "Saving final Pareto front..."
-    CALL save_final_pareto(parent_pop, '../outputs/final_pareto_front.csv')
-
-    ! 2. Auto-select the best cost solution and generate 4D wind field
-    CALL save_animation_data(parent_pop, site, turbines, config)
-    
-    ! 3. Free all memory to prevent leaks
-    CALL cleanup_memory(config, site, turbines, parent_pop, offspring_pop, combined_pop)
-    
-    PRINT *, "Run finished successfully."
-
-END PROGRAM windfarm_optimizer
-

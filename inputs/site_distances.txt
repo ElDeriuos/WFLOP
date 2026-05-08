@@ -1,2 +1,1 @@
-38.0    32.0    50.0   ! Distance from shore and grid ! Distance from nearest port
-            
+10.712 12.776 11.968
