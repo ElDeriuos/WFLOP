@@ -5,6 +5,7 @@ import subprocess
 from pyproj import Transformer
 import json
 import stat
+import sys
 
 def calculate_polygon_area(x, y):
     """Calculates polygon area using the Shoelace formula."""
@@ -121,19 +122,23 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
         with open(proj_name, 'w', newline='\n') as f:
             f.write(f"{mesh_input_file:<80}\n")
             f.write(f"{'./inputs/windfarm_rocol.txt':<80}\n")
-            f.write(f"{'./inputs/windfarm_1.plt':<80}\n")
+            f.write(f"{'./outputs/windfarm_1.plt':<80}\n")
             f.write(f"{'windfarm_2.plt':<80}\n")
 
 
-    binary_path = './source/polygon3' 
+    if sys.platform == "win32":
+        binary_path = './source/polygon3.exe'
+        output_callback("Executing polygon3 mesh generator natively in Windows...")
+    else:
+        binary_path = './source/polygon3'
+        output_callback("Executing polygon3 mesh generator natively in Linux/WSL...")
     
-    # Give the file executable permissions for the user
+    # Give the file executable permissions for the user (Handled gracefully by OS)
     if os.path.exists(binary_path):
         st = os.stat(binary_path)
         os.chmod(binary_path, st.st_mode | stat.S_IEXEC)
 
     # 6. Execute polygon3 and Cleanup
-    output_callback("Executing polygon3 mesh generator natively in WSL...")
     try:
         process = subprocess.run(
             [binary_path], 
@@ -143,7 +148,7 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
         )
         
         output_callback("Mesh generation successful. Cleaning up temporary files...")
-        
+
         # Cleanup routine
         files_to_remove = [mesh_input_file, 'windfarm_2.plt', 'polygon_project.txt', 't', 't2.dat', 'geom3.dat']
         for file in files_to_remove:
@@ -152,7 +157,6 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
                 
         output_callback("--- Mesh Pipeline Complete ---")
         
-        output_callback("--- Mesh Pipeline Complete ---")
         
         # Save metadata to a physical file for future modules
         metadata = {

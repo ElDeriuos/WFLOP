@@ -1,8 +1,10 @@
-50       ! it_max
-100       ! n_pop
-0.2       ! p_cross
-0.8       ! p_mutation
-0.08       ! mu
-60       ! max_turbs
-10       ! min_turbs
-0.65     ! workability probability
+30
+30
+0.4
+0.6
+0.08
+50
+10
+0.65
+1
+1

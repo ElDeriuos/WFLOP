@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2" xmlns:kml="http://www.opengis.net/kml/2.2" xmlns:atom="http://www.w3.org/2005/Atom">
+<Document>
+	<name>Kish.kml</name>
+	<StyleMap id="inline">
+		<Pair>
+			<key>normal</key>
+			<styleUrl>#inline0</styleUrl>
+		</Pair>
+		<Pair>
+			<key>highlight</key>
+			<styleUrl>#inline1</styleUrl>
+		</Pair>
+	</StyleMap>
+	<Style id="inline0">
+		<LineStyle>
+			<color>ff0000ff</color>
+			<width>2</width>
+		</LineStyle>
+		<PolyStyle>
+			<fill>0</fill>
+		</PolyStyle>
+	</Style>
+	<Style id="inline1">
+		<LineStyle>
+			<color>ff0000ff</color>
+			<width>2</width>
+		</LineStyle>
+		<PolyStyle>
+			<fill>0</fill>
+		</PolyStyle>
+	</Style>
+	<Placemark>
+		<name>Kish</name>
+		<styleUrl>#inline</styleUrl>
+		<Polygon>
+			<tessellate>1</tessellate>
+			<outerBoundaryIs>
+				<LinearRing>
+					<coordinates>
+						54.04970038148226,26.52195050398341,0 54.04521885410362,26.50716546160114,0 54.03416755851268,26.50174568842471,0 54.02120274623065,26.49951691502377,0 54.00759870074647,26.49744543848262,0 53.99533119632466,26.49521940182116,0 53.97978932971784,26.49562905176151,0 53.96432837787545,26.49948929829302,0 53.95058593680474,26.50459118827677,0 53.93712285218674,26.50739334055491,0 53.92876883093357,26.51324178902707,0 53.91874957192224,26.51699975904124,0 53.90955022495109,26.52577426388788,0 53.90432165965503,26.53584546845741,0 53.89795097095795,26.54728241605789,0 53.90999810447344,26.55368587059417,0 53.91975239783383,26.56254454856524,0 53.93235456579927,26.56974864647911,0 53.94922972618009,26.57396524494659,0 53.96680144614553,26.57111143311658,0 53.9814001757237,26.56776025050244,0 53.99538640668826,26.56693719624015,0 54.01293373925992,26.5655643694042,0 54.02594261025202,26.56143156646911,0 54.02365000649485,26.54773840198203,0 54.02836494700157,26.53777712785535,0 54.03734682538241,26.52737564050703,0 54.04970038148226,26.52195050398341,0 
+					</coordinates>
+				</LinearRing>
+			</outerBoundaryIs>
+		</Polygon>
+	</Placemark>
+</Document>
+</kml>
