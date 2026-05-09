@@ -99,7 +99,7 @@ pip install customtkinter pandas numpy matplotlib pyvista netCDF4
 
 # Install FFmpeg (CRITICAL for animations)
 conda install -c conda-forge ffmpeg
-
+```
 ## 🎮 Usage Guide
 
 1. **Launch the GUI:**
