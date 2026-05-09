@@ -64,7 +64,7 @@ Safely writes data to CSV formats. Dynamically builds headers based on grid size
 
 ## 🎨 Python Frontend & Visualization Modules
 
-### `gui_modern.py`
+### `main.py`
 The control center. Organized into chronological workflow tabs:
 1. **Pre-Processing:** Integrates KML boundaries, GEBCO bathymetry, and ERA5 NetCDF wind data.
 2. **Farm Setup:** Manages the Master Turbine Specification file and physical turbine limits.
@@ -104,7 +104,7 @@ conda install -c conda-forge ffmpeg
 
 1. **Launch the GUI:**
    ```bash
-   python gui_modern.py
+   python main.py
 
 2. **Prepare Inputs:** Use the Pre-Processing tab to generate your spatial mesh and extract wind/depth data.
 
