@@ -6,7 +6,7 @@ PROGRAM run_moga
     USE types                         ! Contains our TYPE definitions
     USE inputs                              ! Reading Files
     use outputs                            ! Writing files
-    USE power                       ! Wake models and AEP
+    USE physics                       ! Wake models and AEP
     USE NSGA_II                       ! GA / NSGA-II mechanisms
     
     IMPLICIT NONE
