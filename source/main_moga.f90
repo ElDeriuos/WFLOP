@@ -29,13 +29,12 @@ PROGRAM run_moga
     ! ------------------------------------------------------------------
     PRINT *, "Starting Wind Farm Optimizer (NSGA-II)..."
     
-    ! 1. Read GUI configurations and setup objectives/wake models
+    ! 1. Read GUI configurations
     CALL read_gui_config('./inputs/config.inp', config)
     
-    ! 2. Load static data into memory (Mesh, Bathymetry, Wind, Turbines)
-    CALL load_turbines('./inputs/turbine_spec.txt', turbines, site)
-    CALL load_site_data('./inputs/filtered_wind.txt', './inputs/farm_bathymetry.dat', &
-                        './inputs/site_distances.txt', site, config)
+    ! 2. Load static data
+    CALL load_turbines(config%f_turb, turbines, site)
+    CALL load_site_data(config%f_wind, config%f_bathy, config%f_dist, site, config)
 
     ! 3. Generate and evaluate the initial random population (P0)
     CALL init_random_seed()                     
@@ -69,8 +68,7 @@ PROGRAM run_moga
         CALL select_survivors(combined_pop, parent_pop, config)
         
         ! 6. Save tracking data for the GUI (Convergence plotting)
-        CALL save_generational_front(generation, parent_pop, &
-                                 './outputs/generational_fronts.csv')
+        CALL save_generational_front(generation, parent_pop, TRIM(config%out_dir) // 'generational_fronts.csv')
         
     END DO
 
@@ -81,7 +79,7 @@ PROGRAM run_moga
   
     ! 1. Save the final Pareto front for the GUI 2D/3D viewers
     PRINT *, "Saving final Pareto front..."
-    CALL save_final_pareto(parent_pop, './outputs/final_pareto_front.csv')
+    CALL save_final_pareto(parent_pop, TRIM(config%out_dir) // 'final_pareto_front.csv', config)
 
     ! 2. Auto-select the best cost solution and generate 4D wind field
     CALL save_animation_data(parent_pop, site, turbines, config)

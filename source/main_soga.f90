@@ -18,9 +18,8 @@ PROGRAM run_soga
     
     ! 1. Read Configurations
     CALL read_gui_config('./inputs/config.inp', config)
-    CALL load_turbines('./inputs/turbine_spec.txt', turbines, site)
-    CALL load_site_data('./inputs/filtered_wind.txt', './inputs/farm_bathymetry.dat', &
-                        './inputs/site_distances.txt', site, config)
+    CALL load_turbines(config%f_turb, turbines, site)
+    CALL load_site_data(config%f_wind, config%f_bathy, config%f_dist, site, config)
 
     ! 2. Initialize and Evaluate First Generation
     CALL init_random_seed()                     
@@ -42,13 +41,13 @@ PROGRAM run_soga
         CALL soga_select_survivors(combined_pop, parent_pop, config)
         
         ! Save Convergence History
-        CALL soga_save_convergence(generation, parent_pop, './outputs/soga_convergence.csv')
+        CALL soga_save_convergence(generation, parent_pop, TRIM(config%out_dir) // 'soga_convergence.csv')
     END DO
 
     PRINT *, "Optimization complete. Saving final outputs..."
     
     ! 4. Save Final SOGA Outputs
-    CALL soga_save_best_layout(parent_pop, './outputs/soga_best_layout.csv')
+    CALL soga_save_best_layout(parent_pop, TRIM(config%out_dir) // 'soga_best_layout.csv')
     CALL soga_save_animation_data(parent_pop, site, turbines, config)
     
     CALL cleanup_memory(config, site, turbines, parent_pop, offspring_pop, combined_pop)
