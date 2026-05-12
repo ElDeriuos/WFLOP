@@ -16,6 +16,13 @@ import subprocess
 ctk.set_appearance_mode("Light")  # Options: "System" (standard), "Dark", "Light"
 ctk.set_default_color_theme("dark-blue")  # Options: "blue" (standard), "green", "dark-blue"
 
+OBJ_MAPPING = {
+    "Minimize LCOE": 1,
+    "Minimize CAPEX": 2,
+    "Maximize AEP": 3,
+    "Minimize Fatigue": 4
+}
+
 class OWFLOGui(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -46,11 +53,29 @@ class OWFLOGui(ctk.CTk):
         self.tab_soga = self.tabview.add("SOGA (Single-Obj)")
         self.tab_moga = self.tabview.add("MOGA (NSGA-II)")
 
+        # ---------------------------------------------------------
+        # 1. DEFINE ALL VARIABLES HERE FIRST!
+        # ---------------------------------------------------------
+        self.opt_mode_var = ctk.StringVar(value="SOGA")
+        self.obj1_var = ctk.StringVar(value="Minimize LCOE")
+        self.obj2_var = ctk.StringVar(value="Minimize Fatigue")
+
+        # --- File Path Variables (With Defaults) ---
+        self.path_turb = ctk.StringVar(value="./inputs/turbine_spec.txt")
+        self.path_wind = ctk.StringVar(value="./inputs/filtered_wind.txt")
+        self.path_bathy = ctk.StringVar(value="./inputs/farm_bathymetry.dat")
+        self.path_dist = ctk.StringVar(value="./inputs/site_distances.txt")
+        self.path_out = ctk.StringVar(value="./outputs/")
+
         # Build the Tabs
         self.build_pre_processing_tab()
         self.build_farm_setup_tab()
         self.build_soga_tab()
         self.build_moga_tab()
+
+        # Run the validation once at startup so the MOGA dropdowns don't overlap
+        self.enforce_unique_objectives(1)
+        self._apply_objective_rules(1)
 
         # =========================================================
         # RIGHT PANEL: THE OUTPUT CENTER
@@ -121,7 +146,13 @@ class OWFLOGui(ctk.CTk):
 
         # SOGA Specifics
         ctk.CTkLabel(soga_frame, text="Target Objective:", font=ctk.CTkFont(weight="bold")).pack(pady=(10, 5), anchor="w", padx=15)
-        self.soga_target = ctk.CTkOptionMenu(soga_frame, values=["Maximize AEP", "Minimize Cost"])
+        
+        # Link this directly to the shared obj1_var
+        self.soga_target = ctk.CTkOptionMenu(
+            soga_frame, 
+            values=list(OBJ_MAPPING.keys()), 
+            variable=self.obj1_var
+        )
         self.soga_target.pack(fill="x", padx=15, pady=5)
 
         ctk.CTkLabel(soga_frame, text="Stall Tolerance (Generations before early stop):").pack(pady=(10, 0), anchor="w", padx=15)
@@ -210,6 +241,24 @@ class OWFLOGui(ctk.CTk):
         self.moga_mu.insert(0, "0.05")
         self.moga_mu.grid(row=2, column=1, padx=5, pady=5)
 
+        # MOGA Objectives
+        obj_frame = ctk.CTkFrame(self.tab_moga, fg_color="transparent")
+        obj_frame.pack(fill="x", padx=10, pady=(5, 10))
+        
+        ctk.CTkLabel(obj_frame, text="Objective 1:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        self.dropdown_obj1 = ctk.CTkOptionMenu(
+            obj_frame, values=list(OBJ_MAPPING.keys()), variable=self.obj1_var, 
+            command=lambda choice: self.enforce_unique_objectives(1)
+        )
+        self.dropdown_obj1.grid(row=0, column=1, padx=5, pady=5)
+
+        ctk.CTkLabel(obj_frame, text="Objective 2:").grid(row=0, column=2, padx=5, pady=5, sticky="e")
+        self.dropdown_obj2 = ctk.CTkOptionMenu(
+            obj_frame, values=list(OBJ_MAPPING.keys()), variable=self.obj2_var, 
+            command=lambda choice: self.enforce_unique_objectives(2)
+        )
+        self.dropdown_obj2.grid(row=0, column=3, padx=5, pady=5)
+
         self.btn_run_moga = ctk.CTkButton(self.tab_moga, text="Run NSGA-II Optimization", height=40, font=ctk.CTkFont(weight="bold"),
                                            command=self.run_moga_pipeline, fg_color="#2c824c", hover_color="#1d5c34")
         self.btn_run_moga.pack(pady=10, fill="x", padx=10, side="bottom")
@@ -260,39 +309,29 @@ class OWFLOGui(ctk.CTk):
     def build_farm_setup_tab(self):
         """Constructs the shared physical constraints and turbine selection."""
         
-        # 1. Turbine File Selection
-        turb_frame = ctk.CTkFrame(self.tab_farm, corner_radius=10)
-        turb_frame.pack(fill="x", padx=10, pady=(10, 20))
+        # 1. Global I/O Paths
+        io_frame = ctk.CTkFrame(self.tab_farm, corner_radius=10)
+        io_frame.pack(fill="x", padx=10, pady=(10, 20))
         
-        ctk.CTkLabel(turb_frame, text="1. Turbine Specification Master File", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
-        
-        # --- NEW: Helpful UI Tip and Template Box ---
-        tip_text = "💡 Tip: This must be the Master Index file containing the paths to your individual turbine CSVs. Follow the exact spacing and alternating rows format below:"
-        ctk.CTkLabel(turb_frame, text=tip_text, text_color="gray", font=ctk.CTkFont(size=11, slant="italic"), wraplength=600, justify="left").pack(anchor="w", padx=15, pady=(0, 5))
+        ctk.CTkLabel(io_frame, text="1. Target Simulation Files & Output Directory", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
+        ctk.CTkLabel(io_frame, text="Defaults point to the ./inputs/ and ./outputs/ folders. Change these if bypassing preprocessing.", text_color="gray", font=ctk.CTkFont(size=11, slant="italic")).pack(anchor="w", padx=15, pady=(0, 10))
 
-        template_box = ctk.CTkTextbox(turb_frame, height=120, fg_color="#1e1e1e", text_color="#a5d6ff", font=ctk.CTkFont(family="Consolas", size=11))
-        template_box.pack(fill="x", padx=15, pady=(5, 10))
-        template_str = (
-            "Number of turbine types\n"
-            "2\n"
-            "=========================================================================\n"
-            "diameter  rated power  cut in  cut off  Height  Turbine name\n"
-            "198.0     10.          4.      25.      119.0   IEA_Reference_10MW_198\n"
-            "./inputs/Turbines/IEA_Reference_10MW_198.csv\n"
-            "240.0     15.          3.      25.      150.0   IEA_Reference_15MW_240\n"
-            "./inputs/Turbines/IEA_Reference_15MW_240.csv\n"
-            "========================================================================="
-        )
-        template_box.insert("0.0", template_str)
-        template_box.configure(state="disabled") # Lock it so the user can't accidentally type in it
-        # ----------------------------------------------
+        io_grid = ctk.CTkFrame(io_frame, fg_color="transparent")
+        io_grid.pack(fill="x", padx=15, pady=5)
 
-        self.turbine_file = None
-        self.lbl_turb_status = ctk.CTkLabel(turb_frame, text="No Turbine Master file selected.", text_color="gray")
-        self.lbl_turb_status.pack(anchor="w", padx=15, pady=(0, 5))
-        
-        ctk.CTkButton(turb_frame, text="Select Master File (.txt/.dat)", width=200, fg_color="#4a4a4a", hover_color="#333333", command=self.select_turbine).pack(anchor="w", padx=15, pady=(5, 15))
+        # Helper UI Builder
+        def add_path_row(row, label_text, string_var, btn_text, is_dir=False, filetypes=[("All Files", "*.*")]):
+            ctk.CTkLabel(io_grid, text=label_text).grid(row=row, column=0, sticky="e", padx=5, pady=5)
+            entry = ctk.CTkEntry(io_grid, textvariable=string_var, width=350)
+            entry.grid(row=row, column=1, padx=5, pady=5, sticky="w")
+            ctk.CTkButton(io_grid, text=btn_text, width=80, fg_color="#4a4a4a", hover_color="#333333", 
+                          command=lambda: self.select_path(string_var, f"Select {label_text}", is_dir, filetypes)).grid(row=row, column=2, padx=5, pady=5)
 
+        add_path_row(0, "Turbine Master:", self.path_turb, "Browse", filetypes=[("Text/CSV", "*.txt *.csv *.dat")])
+        add_path_row(1, "Wind Time-Series:", self.path_wind, "Browse", filetypes=[("Text", "*.txt")])
+        add_path_row(2, "Bathymetry Data:", self.path_bathy, "Browse", filetypes=[("Data", "*.dat")])
+        add_path_row(3, "Site Distances:", self.path_dist, "Browse", filetypes=[("Text", "*.txt")])
+        add_path_row(4, "Output Directory:", self.path_out, "Folder", is_dir=True)
         # 2. Farm Constraints (Shared)
         const_frame = ctk.CTkFrame(self.tab_farm, corner_radius=10)
         const_frame.pack(fill="x", padx=10, pady=0)
@@ -493,6 +532,17 @@ class OWFLOGui(ctk.CTk):
                 self.running_process.kill()  # Hard kill at the OS level
             except Exception as e:
                 self.log(f"🔴 Failed to kill process: {e}")
+    
+    def select_path(self, var_name, title, is_dir=False, filetypes=None):
+        if is_dir:
+            path = filedialog.askdirectory(title=title)
+            # Ensure output directories always end with a slash for Fortran string concatenation
+            if path: 
+                var_name.set(path + "/" if not path.endswith("/") else path)
+        else:
+            path = filedialog.askopenfilename(title=title, filetypes=filetypes)
+            if path: 
+                var_name.set(path)
 
     def select_kmls(self):
         files = filedialog.askopenfilenames(title="Select Boundary KMLs", filetypes=[("KML Files", "*.kml")])
@@ -682,9 +732,6 @@ class OWFLOGui(ctk.CTk):
             min_turbs = int(self.farm_min_turb.get())
             workability = float(self.farm_work.get())
             
-            # Map Objective Target ("Maximize AEP" = 1, "Minimize Cost" = 2)
-            target_str = self.soga_target.get()
-            obj_target = 1 if "AEP" in target_str else 2
             
         except ValueError:
             self.log("🔴 ERROR: Please ensure all SOGA parameters are valid numbers.")
@@ -695,27 +742,11 @@ class OWFLOGui(ctk.CTk):
             self.log("--- Preparing SOGA Environment ---")
             os.makedirs('./inputs', exist_ok=True)
             
-            # 1. Stage the Turbine Master File
-            if not self.turbine_file:
-                self.log("🔴 ERROR: Please select a Turbine Master File in the Farm Setup tab.")
-                self.after(0, lambda: self.btn_run_soga.configure(state="normal"))
-                return
+            # 2. Write the config.inp file using the unified method
+            self.opt_mode_var.set("SOGA") # Force mode to SOGA
             try:
-                target_turbine_path = './inputs/turbine_spec.txt'
-                if os.path.abspath(self.turbine_file) != os.path.abspath(target_turbine_path):
-                    shutil.copy(self.turbine_file, target_turbine_path)
-            except Exception as e:
-                self.log(f"🔴 ERROR staging turbine file: {e}")
-                self.after(0, lambda: self.btn_run_soga.configure(state="normal"))
-                return
-            
-            # 2. Write the config.inp file
-            config_path = './inputs/config.inp'
-            try:
-                with open(config_path, 'w') as f:
-                    f.write(f"{it_max}\n{n_pop}\n{p_cross}\n{p_mut}\n{mu}\n{max_turbs}\n{min_turbs}\n{workability}\n")
-                    f.write("1\n") # opt_mode: 1 = SOGA
-                    f.write(f"{obj_target}\n") # SOGA obj_target
+                # Pass the variables extracted at the top of run_soga_pipeline
+                self.generate_config_file(it_max, n_pop, p_cross, p_mut, mu, max_turbs, min_turbs, workability)
             except Exception as e:
                 self.log(f"🔴 ERROR writing config file: {e}")
                 self.after(0, lambda: self.btn_run_soga.configure(state="normal"))
@@ -841,42 +872,11 @@ class OWFLOGui(ctk.CTk):
             self.log("--- Preparing NSGA-II Environment ---")
             os.makedirs('./inputs', exist_ok=True)
             
-            # --- NEW: Stage the Turbine Master File ---
-            if not self.turbine_file:
-                self.log("🔴 ERROR: Please select a Turbine Master File in the Farm Setup tab.")
-                self.after(0, lambda: self.btn_run_moga.configure(state="normal"))
-                return
-                
+            # 2. Write the config.inp file using the unified method
+            self.opt_mode_var.set("MOGA") # Force mode to MOGA
             try:
-                # Use the exact filename your Fortran expects
-                target_turbine_path = './inputs/turbine_spec.txt'
-                
-                # Check if the selected file is already the target file
-                if os.path.abspath(self.turbine_file) != os.path.abspath(target_turbine_path):
-                    shutil.copy(self.turbine_file, target_turbine_path)
-                    self.log("✅ Turbine Master File copied and staged for Fortran.")
-                else:
-                    self.log("✅ Turbine Master File is already in position.")
-                    
-            except Exception as e:
-                self.log(f"🔴 ERROR staging turbine file: {e}")
-                self.after(0, lambda: self.btn_run_moga.configure(state="normal"))
-                return
-            
-            # 2. Write the config.inp file in the exact order Fortran expects
-            config_path = './inputs/config.inp'
-            try:
-                with open(config_path, 'w') as f:
-                    f.write(f"{it_max}\n")
-                    f.write(f"{n_pop}\n")
-                    f.write(f"{p_cross}\n")
-                    f.write(f"{p_mut}\n")
-                    f.write(f"{mu}\n")
-                    f.write(f"{max_turbs}\n")
-                    f.write(f"{min_turbs}\n")
-                    f.write(f"{workability}\n")
-                    f.write("2\n") # opt_mode: 2 = MOGA
-                    f.write("1\n") # obj_target (Dummy value for MOGA)
+                # Pass the variables extracted at the top of run_moga_pipeline
+                self.generate_config_file(it_max, n_pop, p_cross, p_mut, mu, max_turbs, min_turbs, workability)
             except Exception as e:
                 self.log(f"🔴 ERROR writing config file: {e}")
                 self.after(0, lambda: self.btn_run_moga.configure(state="normal"))
@@ -1093,6 +1093,65 @@ class OWFLOGui(ctk.CTk):
             self.after(0, lambda: self.anim_height_dropdown.set(valid_levels[0]))
         else:
             self.log("⚠️ Could not detect height levels from Fortran output.")
+
+    def enforce_unique_objectives(self, changed_dropdown):
+        """Defers the update slightly to prevent CustomTkinter internal event clashing."""
+        self.after(10, lambda: self._apply_objective_rules(changed_dropdown))
+
+    def _apply_objective_rules(self, changed_dropdown):
+        """Safely applies the mutually exclusive dropdown logic."""
+        val1 = self.obj1_var.get()
+        val2 = self.obj2_var.get()
+        all_opts = list(OBJ_MAPPING.keys())
+
+        # 1. Resolve collision if they somehow match
+        if val1 == val2:
+            if changed_dropdown == 1:
+                # Find the first available option that isn't val1
+                val2 = next(opt for opt in all_opts if opt != val1)
+                self.obj2_var.set(val2)
+            else:
+                # Find the first available option that isn't val2
+                val1 = next(opt for opt in all_opts if opt != val2)
+                self.obj1_var.set(val1)
+
+        # 2. Rebuild lists safely
+        opts1 = [opt for opt in all_opts if opt != val2]
+        opts2 = [opt for opt in all_opts if opt != val1]
+
+        self.dropdown_obj1.configure(values=opts1)
+        self.dropdown_obj2.configure(values=opts2)
+
+    def generate_config_file(self, it_max, n_pop, p_cross, p_mut, mu, max_turbs, min_turbs, workability):
+        """Writes the config.inp file before launching Fortran."""
+        
+        # Determine Opt Mode
+        opt_mode_int = 1 if self.opt_mode_var.get() == "SOGA" else 2
+        
+        # Get mapped integer values
+        obj1_int = OBJ_MAPPING[self.obj1_var.get()]
+        
+        # If SOGA, obj2 doesn't matter, we write 0. If MOGA, get the real value.
+        obj2_int = 0 if opt_mode_int == 1 else OBJ_MAPPING[self.obj2_var.get()]
+
+        with open('./inputs/config.inp', 'w') as f:
+            f.write(f"{it_max}\n")
+            f.write(f"{n_pop}\n")
+            f.write(f"{p_cross}\n")
+            f.write(f"{p_mut}\n")
+            f.write(f"{mu}\n")
+            f.write(f"{max_turbs}\n")
+            f.write(f"{min_turbs}\n")
+            f.write(f"{workability}\n")
+            f.write(f"{opt_mode_int}\n")
+            f.write(f"{obj1_int}\n")
+            f.write(f"{obj2_int}\n")
+            # Write File Paths (Double quoted for safe Fortran list-directed reads)
+            f.write(f'"{self.path_turb.get().replace(chr(92), "/")}"\n')
+            f.write(f'"{self.path_wind.get().replace(chr(92), "/")}"\n')
+            f.write(f'"{self.path_bathy.get().replace(chr(92), "/")}"\n')
+            f.write(f'"{self.path_dist.get().replace(chr(92), "/")}"\n')
+            f.write(f'"{self.path_out.get().replace(chr(92), "/")}"\n')
 
 if __name__ == "__main__":
     app = OWFLOGui()

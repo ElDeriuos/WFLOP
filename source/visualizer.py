@@ -20,9 +20,29 @@ TURBINE_META = {
     6: {'name': 'LEANWIND',  'height': 110.0, 'color': 'purple', 'radius': 14.5, 'marker': 'v'}
 }
 
+
+
 # =====================================================================
 # MODULE 1: PARETO FRONT PLOTTING (Static Images)
 # =====================================================================
+def _get_moga_objectives():
+    """Reads config.inp to dynamically determine the selected objectives."""
+    # Maps the Fortran integer ID to: (CSV Column Name, Optimization Direction, Axis Label)
+    mapping = {
+        1: ('LCOE', 'Minimize', 'Levelized Cost of Energy'), 
+        2: ('raw_cost', 'Minimize', 'Total CAPEX (£)'),
+        3: ('raw_aep', 'Maximize', 'Annual Energy Production (MWh)'), 
+        4: ('raw_fatigue', 'Minimize', 'Total Fatigue Damage')
+    }
+    try:
+        with open('./inputs/config.inp', 'r') as f:
+            lines = f.readlines()
+            obj1_id = int(lines[9].strip())
+            obj2_id = int(lines[10].strip())
+            return mapping[obj1_id], mapping[obj2_id]
+    except Exception:
+        return mapping[2], mapping[3] # Fallback
+
 def save_pareto_plots(gen_file='./outputs/generational_fronts.csv', 
                       final_file='./outputs/final_pareto_front.csv'):
     """Reads optimization history and saves convergence plots as PNG images."""
@@ -33,25 +53,30 @@ def save_pareto_plots(gen_file='./outputs/generational_fronts.csv',
     print("Generating Pareto Front plots...")
     gen_df = pd.read_csv(gen_file)
     final_df = pd.read_csv(final_file)
+    
+    # Get dynamic objectives
+    obj1_info, obj2_info = _get_moga_objectives()
+    col1, dir1, name1 = obj1_info
+    col2, dir2, name2 = obj2_info
 
-    # Plot 1: Evolution over generations
+    # Plot 1: Evolution over generations (Uses generic Fortran tracking array)
     plt.figure(figsize=(10, 6))
     scatter = plt.scatter(gen_df['cost_obj1'], gen_df['aep_obj2'], 
                           c=gen_df['generation'], cmap='cividis', alpha=0.7, s=20)
     plt.colorbar(scatter, label='Generation')
-    plt.xlabel('Financial Cost (Great British Pound)')
-    plt.ylabel('Annual Energy Production (MWh)')
+    plt.xlabel(f'Objective 1 ({name1})')
+    plt.ylabel(f'Objective 2 ({name2})')
     plt.title('Evolution of the Pareto Front')
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.savefig('./outputs/plot_evolution.png', dpi=150, bbox_inches='tight')
     plt.close()
 
-    # Plot 2: Final Pareto Front
+    # Plot 2: Final Pareto Front (Uses the new exact column headers!)
     plt.figure(figsize=(10, 6))
-    plt.scatter(final_df['cost_obj1'], final_df['aep_obj2'], c='blue', label='Optimal Solutions')
-    plt.title('Final Pareto Front: Cost vs. AEP')
-    plt.xlabel('Normalized Financial Cost (Lower is Better)')
-    plt.ylabel('Annual Energy Production (MWh, Higher is Better)')
+    plt.scatter(final_df[col1], final_df[col2], c='blue', label='Optimal Solutions')
+    plt.title(f'Final Pareto Front: {name1} vs. {name2}')
+    plt.xlabel(f'{name1} ({"Lower" if dir1 == "Minimize" else "Higher"} is Better)')
+    plt.ylabel(f'{name2} ({"Lower" if dir2 == "Minimize" else "Higher"} is Better)')
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.legend()
     plt.savefig('./outputs/plot_final_pareto.png', dpi=150, bbox_inches='tight')
@@ -59,7 +84,6 @@ def save_pareto_plots(gen_file='./outputs/generational_fronts.csv',
     
     print("Saved 'plot_evolution.png' and 'plot_final_pareto.png'.")
     return True
-
 # =====================================================================
 # MODULE 2: PYVISTA 3D VISUALIZATION
 # =====================================================================
@@ -142,23 +166,27 @@ def generate_3d_comparison(user_idx=0):
     nodes_xyz = _read_mesh_and_bathymetry()
     df_pareto = pd.read_csv('./outputs/final_pareto_front.csv')
     
-    best_cost_idx = df_pareto['cost_obj1'].idxmin()
-    best_aep_idx = df_pareto['aep_obj2'].idxmax() 
+    # Get dynamic objectives
+    obj1_info, obj2_info = _get_moga_objectives()
+    col1, dir1, name1 = obj1_info
+    col2, dir2, name2 = obj2_info
+    
+    # Dynamically find the best IDs based on Minimize/Maximize
+    best1_idx = df_pareto[col1].idxmin() if dir1 == 'Minimize' else df_pareto[col1].idxmax()
+    best2_idx = df_pareto[col2].idxmin() if dir2 == 'Minimize' else df_pareto[col2].idxmax()
     
     gene_cols = [c for c in df_pareto.columns if 'gene' in c.lower()]
-    genes_cost = df_pareto.iloc[best_cost_idx][gene_cols].astype(int).values
-    genes_aep = df_pareto.iloc[best_aep_idx][gene_cols].astype(int).values
-    genes_user = df_pareto.iloc[user_idx][gene_cols].astype(int).values
+    genes_1 = df_pareto.iloc[best1_idx][gene_cols].astype(int).values
+    genes_2 = df_pareto.iloc[best2_idx][gene_cols].astype(int).values
 
-    plotter = pv.Plotter(shape=(1, 2), window_size=[1400, 600]) # Resized for standard monitors
+    plotter = pv.Plotter(shape=(1, 2), window_size=[1400, 600]) 
     plotter.set_background('grey')
 
-    _plot_farm_solution(plotter, 0, f"Lowest Cost (ID: {best_cost_idx})", nodes_xyz, genes_cost)
-    _plot_farm_solution(plotter, 1, f"Highest AEP (ID: {best_aep_idx})", nodes_xyz, genes_aep)
+    _plot_farm_solution(plotter, 0, f"Best {name1} (ID: {best1_idx})", nodes_xyz, genes_1)
+    _plot_farm_solution(plotter, 1, f"Best {name2} (ID: {best2_idx})", nodes_xyz, genes_2)
 
     plotter.link_views()
     plotter.show()
-
 # =====================================================================
 # MODULE 3: MATPLOTLIB ANIMATION
 # =====================================================================
@@ -207,14 +235,17 @@ def generate_mp4_animation(file_path, level_idx=1, fast_mode=False):
     except ValueError:
         obj_idx = 0 # Default fallback
         
-    # THE FIX: Cost is Minimized (idxmin), but positive AEP is Maximized (idxmax)
+    # THE FIX: Dynamically find the best layout using our helper!
+    obj1_info, obj2_info = _get_moga_objectives()
     if obj_idx == 0:
-        best_layout_idx = df_pareto.iloc[:, 0].idxmin() # Lowest Cost
-    elif obj_idx == 1:
-        best_layout_idx = df_pareto.iloc[:, 1].idxmax() # Highest AEP
+        col, direction, _ = obj1_info
     else:
-        # Fallback for any future objectives (assuming minimization)
-        best_layout_idx = df_pareto.iloc[:, obj_idx].idxmin() 
+        col, direction, _ = obj2_info
+        
+    if direction == 'Minimize':
+        best_layout_idx = df_pareto[col].idxmin()
+    else:
+        best_layout_idx = df_pareto[col].idxmax()
         
     best_layout = df_pareto.iloc[best_layout_idx]
     genes = best_layout[[c for c in df_pareto.columns if 'gene' in c.lower()]].astype(int).values

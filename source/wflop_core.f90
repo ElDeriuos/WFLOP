@@ -31,9 +31,15 @@ MODULE types
         INTEGER, ALLOCATABLE :: ub(:)  ! Upper bounds for each gene (node)
         REAL(wp) :: workability   ! The percentage of time the weather allows construction
         
-        ! ---  SOGA ROUTING VARIABLES ---
-        INTEGER  :: opt_mode     ! 1 = Single-Objective (SOGA), 2 = Multi-Objective (NSGA-II)
-        INTEGER  :: obj_target   ! 1 = Maximize AEP (Cost/Wake to be added later)
+        INTEGER  :: opt_mode     ! 1 = SOGA, 2 = MOGA
+        INTEGER  :: obj_1        ! SOGA target, or MOGA Objective 1
+        INTEGER  :: obj_2        ! MOGA Objective 2 (Ignored if SOGA)
+        ! --- File Paths ---
+        CHARACTER(LEN=512) :: f_turb
+        CHARACTER(LEN=512) :: f_wind
+        CHARACTER(LEN=512) :: f_bathy
+        CHARACTER(LEN=512) :: f_dist
+        CHARACTER(LEN=512) :: out_dir
     END TYPE ConfigData
 
     ! ==================================================================
@@ -89,6 +95,7 @@ MODULE types
         ! --- RAW METRICS  ---
         REAL(wp)              :: raw_cost      ! Pure financial Cost
         REAL(wp)              :: raw_aep       ! Pure Annual Energy Production
+        real(wp)              :: raw_fatigue   ! Maximum fatigue load (to be added later)
         REAL(wp)              :: fitness       ! Scalar fitness score used ONLY by SOGA
         
         ! --- NSGA-II METRICS ---
@@ -150,10 +157,16 @@ CONTAINS
         READ(f_unit, *) config%min_turbs
         READ(f_unit, *) config%workability
         
-        ! --- SOGA parameters ---
         READ(f_unit, *) config%opt_mode
-        READ(f_unit, *) config%obj_target
+        READ(f_unit, *) config%obj_1
+        READ(f_unit, *) config%obj_2
         
+        ! Read File Paths
+        READ(f_unit, *) config%f_turb
+        READ(f_unit, *) config%f_wind
+        READ(f_unit, *) config%f_bathy
+        READ(f_unit, *) config%f_dist
+        READ(f_unit, *) config%out_dir
         ! READ(f_unit, *) config%max_iter
         CLOSE(f_unit)
 
@@ -799,7 +812,7 @@ CONTAINS
 
 END MODULE costs
 
-MODULE power
+MODULE physics
 
     USE precision, ONLY: wp
     USE types,     ONLY: SiteData, TurbineSpec, Individual, ConfigData
@@ -807,74 +820,106 @@ MODULE power
     IMPLICIT NONE
     PRIVATE
 
-    ! Expose ONLY the top-level evaluation routine
-    PUBLIC :: evaluate_aep
-    public :: calculate_3d_wind_field
+    ! Expose ONLY the top-level evaluation routines
+    PUBLIC :: evaluate_physics
+    PUBLIC :: calculate_3d_wind_field
+
+    ! ==================================================================
+    ! TEMPORARY HARDCODED FATIGUE & ENVIRONMENTAL PARAMETERS (Yang 2025)
+    ! ==================================================================
+    REAL(wp), PARAMETER :: I_ambient = 0.08_wp       ! Ambient Turbulence Intensity (8%)
+    REAL(wp), PARAMETER :: g_v       = 3.7_wp        ! Gust factor (3-s gust)
+    REAL(wp), PARAMETER :: rho       = 1.225_wp      ! Air density (kg/m^3)
+    REAL(wp), PARAMETER :: pi        = 3.141592653589793_wp
+    
+    ! Structural (Tower Root Approximation for typical 2MW-5MW)
+    REAL(wp), PARAMETER :: r_pile    = 2.0_wp        ! Tower root radius (m)
+    REAL(wp), PARAMETER :: t_tower   = 0.03_wp       ! Tower root thickness (m)
+    REAL(wp), PARAMETER :: I_z       = pi * &
+                            (r_pile**3) * t_tower    ! Area moment of inertia (m^4) ~ pi * r^3 * t
+    
+    ! Material Properties (Typical Offshore Steel in MPa)
+    REAL(wp), PARAMETER :: sigma_y   = 345.0_wp      ! Yield strength (MPa)
+    REAL(wp), PARAMETER :: sigma_b   = 450.0_wp      ! Ultimate tensile strength (MPa)
+    
+    ! S-N Curve Constants (DNV Standards for Tubular Joints)
+    REAL(wp), PARAMETER :: t_ref     = 0.032_wp      ! Reference thickness (m)
+    REAL(wp), PARAMETER :: k_fatigue = 0.10_wp       ! Thickness exponent
+
+    ! Turbine Operational Data
+    REAL(wp), PARAMETER :: rpm_avg   = 12.0_wp       ! Average Rotor RPM
+    REAL(wp), PARAMETER :: cycles_per_hr = rpm_avg * 60.0_wp ! cycles per hour (720)
 
 CONTAINS
 
     ! ==================================================================
-    ! SUBROUTINE: evaluate_aep (Optimized Sparse Matrix Approach)
+    ! SUBROUTINE: evaluate_physics (Wake + Power + Fatigue)
     ! ==================================================================
-    SUBROUTINE evaluate_aep(ind, site, turbines, config)
+    SUBROUTINE evaluate_physics(ind, site, turbines, config)
         TYPE(Individual),  INTENT(INOUT) :: ind
         TYPE(SiteData),    INTENT(IN)    :: site
         TYPE(TurbineSpec), INTENT(IN)    :: turbines(:)
         TYPE(ConfigData),  INTENT(IN)    :: config
 
         INTEGER :: n_turb, i, m, t_step, t_type, n_idx, k_iter
-        REAL(wp) :: total_aep, tep_farm, v_local, cp_val, area, m_ct
-        REAL(wp), PARAMETER :: rho = 1.225_wp, pi = 3.141592653589793_wp
+        REAL(wp) :: total_aep, tep_farm, v_local, i_local, cp_val, area, m_ct
+        REAL(wp) :: F_mean, F_peak, sig_mean, sig_max, sig_a, sig_m, sig_e
+        REAL(wp) :: N_cycles, log_N, thickness_corr
 
         ! --- SPARSE ARRAYS ---
         INTEGER, ALLOCATABLE  :: node_idx(:), type_turb(:), h_idx(:)
-        REAL(wp), ALLOCATABLE :: ws_new(:), ws_old(:)
-        REAL(wp), ALLOCATABLE :: wake_deficit(:), single_deficit(:)
+        REAL(wp), ALLOCATABLE :: ws_new(:), ws_old(:), ti_new(:)
+        REAL(wp), ALLOCATABLE :: wake_deficit_u(:), single_deficit_u(:)
+        REAL(wp), ALLOCATABLE :: wake_added_i(:), single_added_i(:)
+        REAL(wp), ALLOCATABLE :: cum_damage(:) ! Cumulative Fatigue Damage
         
-        ! 1. Extract Active Turbines to Sparse Arrays (The Performance Fix)
         n_turb = COUNT(ind%chromosome > 1)
-        ! IF (n_turb == 0) THEN
-        !     ind%obj_vals(2) = 0.0_wp  
-        !     RETURN
-        ! END IF
+        IF (n_turb == 0) RETURN
 
         ALLOCATE(node_idx(n_turb), type_turb(n_turb), h_idx(n_turb))
-        ALLOCATE(ws_new(n_turb), ws_old(n_turb))
-        ALLOCATE(wake_deficit(n_turb), single_deficit(n_turb))
+        ALLOCATE(ws_new(n_turb), ws_old(n_turb), ti_new(n_turb))
+        ALLOCATE(wake_deficit_u(n_turb), single_deficit_u(n_turb))
+        ALLOCATE(wake_added_i(n_turb), single_added_i(n_turb))
+        ALLOCATE(cum_damage(n_turb))
+        
+        cum_damage = 0.0_wp
 
-        ! Build the lookup tables
+        ! Build lookup tables
         m = 1
         DO i = 1, site%n_nodes
             t_type = ind%chromosome(i)
             IF (t_type > 1) THEN
                 node_idx(m) = i
-                type_turb(m) = ind%chromosome(i)
-                h_idx(m)     = turbines(t_type)%h_idx
+                type_turb(m) = t_type
+                h_idx(m) = turbines(t_type)%h_idx
                 m = m + 1
             END IF
         END DO
 
         total_aep = 0.0_wp
+        thickness_corr = k_fatigue * LOG10(t_tower / t_ref)
 
         ! --------------------------------------------------------------
-        ! MAIN TIME-STEP LOOP
+        ! MAIN TIME-STEP LOOP (Hourly Data)
         ! --------------------------------------------------------------
         DO t_step = 1, site%nsteps
             
-            ! Initialize local wind speeds for the active turbines ONLY
+            ! Initialize local wind speeds and ambient TI
             DO m = 1, n_turb
                 n_idx = node_idx(m)
                 ws_new(m) = site%ws0_ts(n_idx, h_idx(m), t_step)
+                ti_new(m) = I_ambient 
             END DO
             
             ! ----------------------------------------------------------
-            ! ALL-TO-ALL ITERATIVE SOLVER (Sparse Logic)
+            ! ALL-TO-ALL ITERATIVE WAKE SOLVER (Velocity & Turbulence)
             ! ----------------------------------------------------------
             DO k_iter = 1, config%max_iter 
                 ws_old = ws_new 
-                wake_deficit = 0.0_wp
+                wake_deficit_u = 0.0_wp
+                wake_added_i   = 0.0_wp
                 
-                ! Loop 1: Calculate wakes produced by active turbines
+                ! Calculate wakes produced by active turbines
                 DO m = 1, n_turb
                     t_type = type_turb(m)
                     n_idx  = node_idx(m)
@@ -883,71 +928,121 @@ CONTAINS
                     m_ct = get_coeff(v_local, turbines(t_type)%v_ref, &
                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
                     
-                    ! ONLY calculate deficit AT the other turbine locations!
-                    CALL bastankhah_wake_sparse(m, n_idx, turbines(t_type), m_ct, site, turbines, &
-                                                n_turb, node_idx, type_turb, t_step, single_deficit)
+                    CALL analytical_wake_sparse(m, n_idx, turbines(t_type), m_ct, site, turbines, &
+                                                n_turb, node_idx, type_turb, t_step, &
+                                                single_deficit_u, single_added_i)
                     
-                    wake_deficit = wake_deficit + (single_deficit**2)
+                    ! Superposition: Sum of Squares for Velocity, TKE for Turbulence
+                    wake_deficit_u = wake_deficit_u + (single_deficit_u**2)
+                    wake_added_i   = wake_added_i + (single_added_i**2)
                 END DO
 
-                ! Loop 2: Apply the total aggregated wake
+                ! Apply aggregated wake to local conditions
                 DO m = 1, n_turb
-                    IF (SQRT(wake_deficit(m)) < 1.0_wp) THEN
+                    IF (SQRT(wake_deficit_u(m)) < 1.0_wp) THEN
                         n_idx = node_idx(m)          
-                        ! Multiply original free-stream by the wake fraction
-                        ws_new(m) = site%ws0_ts(n_idx, h_idx(m), t_step) * (1.0_wp - SQRT(wake_deficit(m)))
+                        ws_new(m) = site%ws0_ts(n_idx, h_idx(m), t_step) * (1.0_wp - SQRT(wake_deficit_u(m)))
+                        ti_new(m) = SQRT(I_ambient**2 + wake_added_i(m))
                     ELSE
                         ws_new(m) = 0.0_wp
+                        ti_new(m) = I_ambient
                     END IF
                 END DO
 
-                ! Convergence Check (comparing just the n_turb values)
+                ! Convergence Check
                 IF (MAXVAL(ABS(ws_new - ws_old)) < 1.0E-4_wp) EXIT 
             END DO 
             
             ! ----------------------------------------------------------
-            ! Calculate power using the FINAL converged local speeds
+            ! Calculate POWER & FATIGUE using converged local speeds
             ! ----------------------------------------------------------
             tep_farm = 0.0_wp
             DO m = 1, n_turb
                 t_type = type_turb(m)
                 v_local = ws_new(m)
+                i_local = ti_new(m)
                 
+                ! --- 1. POWER ---
                 cp_val = get_coeff(v_local, turbines(t_type)%v_ref, &
                                    turbines(t_type)%cp_ref, turbines(t_type)%n_points)
-                
                 area = pi * (turbines(t_type)%rotor_diameter / 2.0_wp)**2
                 tep_farm = tep_farm + (0.5_wp * rho * area * (v_local**3) * cp_val)
+                
+                ! --- 2. FATIGUE ---
+                ! Only calculate operational fatigue if turbine is spinning
+                IF (v_local >= turbines(t_type)%v_ref(1) .AND. cp_val > 0.0_wp) THEN
+                    m_ct = get_coeff(v_local, turbines(t_type)%v_ref, &
+                                     turbines(t_type)%ct_ref, turbines(t_type)%n_points)
+                                     
+                    ! Thrust forces (Newtons)
+                    F_mean = 0.5_wp * rho * area * m_ct * (v_local**2)
+                    F_peak = 0.5_wp * rho * area * m_ct * ((v_local * (1.0_wp + g_v * i_local))**2)
+                    
+                    ! Stresses at tower root (Convert Pascals to MPa for DNV curve)
+                    sig_mean = (F_mean * turbines(t_type)%hub_height * r_pile) / I_z / 1.0E6_wp
+                    sig_max  = (F_peak * turbines(t_type)%hub_height * r_pile) / I_z / 1.0E6_wp
+                    sig_a    = sig_max - sig_mean
+                    
+                    ! Modified average stress (Goodman Correction - Eq 8)
+                    IF ((sig_mean + sig_a) < sigma_y) THEN
+                        sig_m = sig_mean
+                    ELSE IF ((sig_mean + sig_a) >= sigma_y .AND. sig_mean < sigma_y) THEN
+                        sig_m = sigma_y - sig_a
+                    ELSE
+                        sig_m = 0.0_wp
+                    END IF
+                    
+                    ! Equivalent stress amplitude (Eq 7)
+                    sig_e = sig_a / (1.0_wp - (sig_m / sigma_b))
+                    
+                    ! S-N Curve Cycles to Failure (Eq 9 & 10)
+                    ! Check low-cycle vs high-cycle regime
+                    ! Assume High-cycle first (m=5) to check N > 10^7
+                    log_N = 16.081_wp - 5.0_wp * LOG10(sig_e) - 5.0_wp * thickness_corr
+                    N_cycles = 10.0_wp**log_N
+                    
+                    IF (N_cycles <= 1.0E7_wp) THEN
+                        ! Recalculate with Low-cycle curve (m=3)
+                        log_N = 12.449_wp - 3.0_wp * LOG10(sig_e) - 3.0_wp * thickness_corr
+                        N_cycles = 10.0_wp**log_N
+                    END IF
+                    
+                    ! Accumulate Fractional Damage via Miner's Rule
+                    cum_damage(m) = cum_damage(m) + (cycles_per_hr / N_cycles)
+                END IF
             END DO
             
             total_aep = total_aep + tep_farm
         END DO
 
-        total_aep = total_aep / REAL(site%nsteps, wp) ! Average Power (Watts)
-        total_aep = total_aep * 8760.0_wp / 1.0E9_wp  ! Annual Energy Production (GWh / Year)
-        ! ind%obj_vals(1) = ind%obj_vals(1) / (total_aep * config%farmlifetime)
-        ! ind%obj_vals(2) = -total_aep * config%farmlifetime
-        ! ! --- NEW: Store purely as Raw AEP (Lifetime GWh) ---
-        ! ind%raw_aep = total_aep * config%farmlifetime
+        ! Post-process AEP
+        total_aep = total_aep / REAL(site%nsteps, wp) 
+        total_aep = total_aep * 8760.0_wp / 1.0E9_wp  
         ind%raw_aep = total_aep
 
-        DEALLOCATE(node_idx, type_turb, ws_new, ws_old, wake_deficit, single_deficit)
+        ind%raw_fatigue = MAXVAL(cum_damage) ! Maximum damage across turbines as farm-level fatigue metric
 
-    END SUBROUTINE evaluate_aep
+        ! Store Maximum Farm Damage as the secondary objective to minimize
+        ! ind%obj_vals(2) = MAXVAL(cum_damage)
+
+        DEALLOCATE(node_idx, type_turb, ws_new, ws_old, ti_new)
+        DEALLOCATE(wake_deficit_u, single_deficit_u, wake_added_i, single_added_i)
+        DEALLOCATE(cum_damage)
+
+    END SUBROUTINE evaluate_physics
 
     ! ==================================================================
-    ! SUBROUTINE: bastankhah_wake_sparse
-    ! (Strict mathematical port of original F77 logic)
+    ! SUBROUTINE: analytical_wake_sparse (Calculates dU and dI)
     ! ==================================================================
-    SUBROUTINE bastankhah_wake_sparse(m, n_idx, t_spec, m_ct1, site, turbines, &
-                                      n_turb, node_idx, type_turb, t_step, deficit)
+    SUBROUTINE analytical_wake_sparse(m, n_idx, t_spec, m_ct1, site, turbines, &
+                                      n_turb, node_idx, type_turb, t_step, deficit_u, added_i)
         TYPE(SiteData),    INTENT(IN)  :: site
         TYPE(TurbineSpec), INTENT(IN)  :: turbines(:)
         TYPE(TurbineSpec), INTENT(IN)  :: t_spec
         INTEGER,           INTENT(IN)  :: m, n_idx, n_turb, t_step
         INTEGER,           INTENT(IN)  :: node_idx(:), type_turb(:)
         REAL(wp),          INTENT(IN)  :: m_ct1
-        REAL(wp),          INTENT(OUT) :: deficit(:) ! Now a 1D array of size n_turb
+        REAL(wp),          INTENT(OUT) :: deficit_u(:), added_i(:) 
         
         REAL(wp), PARAMETER :: k_star = 0.0324_wp 
         
@@ -955,31 +1050,23 @@ CONTAINS
         REAL(wp) :: dx, dy, x_rot, y_rot, x_rel
         REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord
         INTEGER  :: i, j_node, j_type
-        real(wp) :: m_ct
+        REAL(wp) :: m_ct
         
-        ! 1. Initialize output deficit array to zero
-        deficit = 0.0_wp
+        deficit_u = 0.0_wp
+        added_i   = 0.0_wp
         
-        ! 2. Get properties of the wake-producing turbine (m)
         hubX   = site%x_coord(n_idx)
         hubY   = site%y_coord(n_idx)
         theta  = site%wd0_ts(n_idx, t_step)
         d_wake = t_spec%rotor_diameter
         h_wake = t_spec%hub_height
-        m_ct = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
-        ! 3. Calculate beta
-        ! (Using MAX to prevent NaN if m_ct somehow hits 1.0)
-        beta = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
-                                   
+        m_ct   = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
+        beta   = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
 
-        ! 4. Loop through ONLY the downstream active turbines
         DO i = 1, n_turb
-            ! A turbine cannot wake itself
             IF (i == m) CYCLE
-            
             j_node = node_idx(i)
             
-            ! 5. Calculate rotated coordinates (Exact match to old script)
             dx = site%x_coord(j_node) - hubX
             dy = site%y_coord(j_node) - hubY
             x_rot =  dx * COS(theta) + dy * SIN(theta)
@@ -988,99 +1075,29 @@ CONTAINS
             radial_dist = ABS(y_rot)
             x_rel = MAX(x_rot, 0.0_wp)
             
-            ! 6. Logic Gates: Downstream AND within 3 diameters
             IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
                 
-                ! Calculate normalized wake diameter
+                ! Velocity Deficit (Bastankhah Gaussian)
                 sigma_d0 = (k_star * x_rel / d_wake) + (0.2_wp * SQRT(beta))
-                
-                ! Pre-calculate Gaussian terms
                 a1 = m_ct / (8.0_wp * (sigma_d0 ** 2))
-                
-                ! --- ANTI-NaN NEAR-WAKE CAP (Restored exactly) ---
                 IF (a1 >= 1.0_wp) a1 = 0.999_wp
                 
                 b1 = -1.0_wp / (2.0_wp * (sigma_d0 ** 2))
                 c2 = (radial_dist / d_wake) ** 2
                 
-                ! 7. Calculate height difference specifically for the target turbine
                 j_type  = type_turb(i)
                 z_coord = turbines(j_type)%hub_height
                 c1 = ((z_coord - h_wake) / d_wake) ** 2
                 
-                ! 8. Apply exact deficit formula
-                deficit(i) = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
+                deficit_u(i) = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
                 
+                ! Turbulence Addition (Generic Empirical Stand-in for Ishihara)
+                ! Form: dI = K * a^x * I_0^y * (x/D)^z
+                added_i(i) = 0.73_wp * (1.0_wp - SQRT(1.0_wp - m_ct))**0.8325_wp * &
+                             I_ambient**0.0325_wp * (x_rel / d_wake)**(-0.32_wp)
             END IF
         END DO
-    END SUBROUTINE bastankhah_wake_sparse
-
-    ! ==================================================================
-    ! SUBROUTINE: bastankhah_wake_dense
-    ! Calculates the wake deficit across ALL nodes and ALL height levels
-    ! ==================================================================
-    SUBROUTINE bastankhah_wake_dense(n_idx, t_spec, m_ct1, site, t_step, deficit)
-        TYPE(SiteData),    INTENT(IN)  :: site
-        TYPE(TurbineSpec), INTENT(IN)  :: t_spec
-        INTEGER,           INTENT(IN)  :: n_idx, t_step
-        REAL(wp),          INTENT(IN)  :: m_ct1
-        REAL(wp),          INTENT(OUT) :: deficit(:,:) ! 2D: (n_nodes, n_hlevels)
-        
-        REAL(wp), PARAMETER :: k_star = 0.0324_wp
-        
-        REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake
-        REAL(wp) :: dx, dy, x_rot, y_rot, x_rel
-        REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord
-        INTEGER  :: i, j
-
-        real(wp) :: m_ct
-        
-        ! 1. Initialize output deficit array to zero
-        deficit = 0.0_wp
-        
-        ! 2. Get properties of the wake-producing turbine
-        hubX   = site%x_coord(n_idx)
-        hubY   = site%y_coord(n_idx)
-        theta  = site%wd0_ts(n_idx, t_step)
-        d_wake = t_spec%rotor_diameter
-        h_wake = t_spec%hub_height
-        m_ct = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
-        ! 3. Calculate beta
-        beta = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
-
-        ! 4. Loop through EVERY node in the grid
-        DO i = 1, site%n_nodes
-            
-            ! 5. Calculate rotated coordinates
-            dx = site%x_coord(i) - hubX
-            dy = site%y_coord(i) - hubY
-            x_rot =  dx * COS(theta) + dy * SIN(theta)
-            y_rot = -dx * SIN(theta) + dy * COS(theta)
-            
-            radial_dist = ABS(y_rot)
-            x_rel = MAX(x_rot, 0.0_wp)
-            
-            ! 6. Logic Gates: Downstream AND within 3 diameters
-            IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
-                
-                sigma_d0 = (k_star * x_rel / d_wake) + (0.2_wp * SQRT(beta))
-                a1 = m_ct / (8.0_wp * (sigma_d0 ** 2))
-                
-                IF (a1 >= 1.0_wp) a1 = 0.999_wp
-                
-                b1 = -1.0_wp / (2.0_wp * (sigma_d0 ** 2))
-                c2 = (radial_dist / d_wake) ** 2
-                
-                ! 7. Calculate deficit for EVERY height level at this node
-                DO j = 1, site%n_hlevel
-                    z_coord = site%h_level(j)
-                    c1 = ((z_coord - h_wake) / d_wake) ** 2
-                    
-                    deficit(i, j) = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
-                END DO
-            END IF
-        END DO
-    END SUBROUTINE bastankhah_wake_dense
+    END SUBROUTINE analytical_wake_sparse
 
     ! ==================================================================
     ! SUBROUTINE: calculate_3d_wind_field
@@ -1190,8 +1207,73 @@ CONTAINS
     END SUBROUTINE calculate_3d_wind_field
 
     ! ==================================================================
-    ! HELPER FUNCTIONS
+    ! SUBROUTINE: bastankhah_wake_dense
+    ! Calculates the wake deficit across ALL nodes and ALL height levels
     ! ==================================================================
+    SUBROUTINE bastankhah_wake_dense(n_idx, t_spec, m_ct1, site, t_step, deficit)
+        TYPE(SiteData),    INTENT(IN)  :: site
+        TYPE(TurbineSpec), INTENT(IN)  :: t_spec
+        INTEGER,           INTENT(IN)  :: n_idx, t_step
+        REAL(wp),          INTENT(IN)  :: m_ct1
+        REAL(wp),          INTENT(OUT) :: deficit(:,:) ! 2D: (n_nodes, n_hlevels)
+        
+        REAL(wp), PARAMETER :: k_star = 0.0324_wp
+        
+        REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake
+        REAL(wp) :: dx, dy, x_rot, y_rot, x_rel
+        REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord
+        INTEGER  :: i, j
+
+        real(wp) :: m_ct
+        
+        ! 1. Initialize output deficit array to zero
+        deficit = 0.0_wp
+        
+        ! 2. Get properties of the wake-producing turbine
+        hubX   = site%x_coord(n_idx)
+        hubY   = site%y_coord(n_idx)
+        theta  = site%wd0_ts(n_idx, t_step)
+        d_wake = t_spec%rotor_diameter
+        h_wake = t_spec%hub_height
+        m_ct = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
+        ! 3. Calculate beta
+        beta = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
+
+        ! 4. Loop through EVERY node in the grid
+        DO i = 1, site%n_nodes
+            
+            ! 5. Calculate rotated coordinates
+            dx = site%x_coord(i) - hubX
+            dy = site%y_coord(i) - hubY
+            x_rot =  dx * COS(theta) + dy * SIN(theta)
+            y_rot = -dx * SIN(theta) + dy * COS(theta)
+            
+            radial_dist = ABS(y_rot)
+            x_rel = MAX(x_rot, 0.0_wp)
+            
+            ! 6. Logic Gates: Downstream AND within 3 diameters
+            IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
+                
+                sigma_d0 = (k_star * x_rel / d_wake) + (0.2_wp * SQRT(beta))
+                a1 = m_ct / (8.0_wp * (sigma_d0 ** 2))
+                
+                IF (a1 >= 1.0_wp) a1 = 0.999_wp
+                
+                b1 = -1.0_wp / (2.0_wp * (sigma_d0 ** 2))
+                c2 = (radial_dist / d_wake) ** 2
+                
+                ! 7. Calculate deficit for EVERY height level at this node
+                DO j = 1, site%n_hlevel
+                    z_coord = site%h_level(j)
+                    c1 = ((z_coord - h_wake) / d_wake) ** 2
+                    
+                    deficit(i, j) = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
+                END DO
+            END IF
+        END DO
+    END SUBROUTINE bastankhah_wake_dense
+
+
     FUNCTION get_coeff(v_in, v_ref, c_ref, n_pts) RESULT(coeff)
         REAL(wp), INTENT(IN) :: v_in
         REAL(wp), INTENT(IN) :: v_ref(:), c_ref(:)
@@ -1211,13 +1293,427 @@ CONTAINS
         END DO
     END FUNCTION get_coeff
 
-END MODULE power
+END MODULE physics
+
+! MODULE power
+
+!     USE precision, ONLY: wp
+!     USE types,     ONLY: SiteData, TurbineSpec, Individual, ConfigData
+    
+!     IMPLICIT NONE
+!     PRIVATE
+
+!     ! Expose ONLY the top-level evaluation routine
+!     PUBLIC :: evaluate_aep
+!     public :: calculate_3d_wind_field
+
+! CONTAINS
+
+!     ! ==================================================================
+!     ! SUBROUTINE: evaluate_aep (Optimized Sparse Matrix Approach)
+!     ! ==================================================================
+!     SUBROUTINE evaluate_aep(ind, site, turbines, config)
+!         TYPE(Individual),  INTENT(INOUT) :: ind
+!         TYPE(SiteData),    INTENT(IN)    :: site
+!         TYPE(TurbineSpec), INTENT(IN)    :: turbines(:)
+!         TYPE(ConfigData),  INTENT(IN)    :: config
+
+!         INTEGER :: n_turb, i, m, t_step, t_type, n_idx, k_iter
+!         REAL(wp) :: total_aep, tep_farm, v_local, cp_val, area, m_ct
+!         REAL(wp), PARAMETER :: rho = 1.225_wp, pi = 3.141592653589793_wp
+
+!         ! --- SPARSE ARRAYS ---
+!         INTEGER, ALLOCATABLE  :: node_idx(:), type_turb(:), h_idx(:)
+!         REAL(wp), ALLOCATABLE :: ws_new(:), ws_old(:)
+!         REAL(wp), ALLOCATABLE :: wake_deficit(:), single_deficit(:)
+        
+!         ! 1. Extract Active Turbines to Sparse Arrays (The Performance Fix)
+!         n_turb = COUNT(ind%chromosome > 1)
+!         ! IF (n_turb == 0) THEN
+!         !     ind%obj_vals(2) = 0.0_wp  
+!         !     RETURN
+!         ! END IF
+
+!         ALLOCATE(node_idx(n_turb), type_turb(n_turb), h_idx(n_turb))
+!         ALLOCATE(ws_new(n_turb), ws_old(n_turb))
+!         ALLOCATE(wake_deficit(n_turb), single_deficit(n_turb))
+
+!         ! Build the lookup tables
+!         m = 1
+!         DO i = 1, site%n_nodes
+!             t_type = ind%chromosome(i)
+!             IF (t_type > 1) THEN
+!                 node_idx(m) = i
+!                 type_turb(m) = ind%chromosome(i)
+!                 h_idx(m)     = turbines(t_type)%h_idx
+!                 m = m + 1
+!             END IF
+!         END DO
+
+!         total_aep = 0.0_wp
+
+!         ! --------------------------------------------------------------
+!         ! MAIN TIME-STEP LOOP
+!         ! --------------------------------------------------------------
+!         DO t_step = 1, site%nsteps
+            
+!             ! Initialize local wind speeds for the active turbines ONLY
+!             DO m = 1, n_turb
+!                 n_idx = node_idx(m)
+!                 ws_new(m) = site%ws0_ts(n_idx, h_idx(m), t_step)
+!             END DO
+            
+!             ! ----------------------------------------------------------
+!             ! ALL-TO-ALL ITERATIVE SOLVER (Sparse Logic)
+!             ! ----------------------------------------------------------
+!             DO k_iter = 1, config%max_iter 
+!                 ws_old = ws_new 
+!                 wake_deficit = 0.0_wp
+                
+!                 ! Loop 1: Calculate wakes produced by active turbines
+!                 DO m = 1, n_turb
+!                     t_type = type_turb(m)
+!                     n_idx  = node_idx(m)
+!                     v_local = ws_new(m)
+                    
+!                     m_ct = get_coeff(v_local, turbines(t_type)%v_ref, &
+!                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
+                    
+!                     ! ONLY calculate deficit AT the other turbine locations!
+!                     CALL bastankhah_wake_sparse(m, n_idx, turbines(t_type), m_ct, site, turbines, &
+!                                                 n_turb, node_idx, type_turb, t_step, single_deficit)
+                    
+!                     wake_deficit = wake_deficit + (single_deficit**2)
+!                 END DO
+
+!                 ! Loop 2: Apply the total aggregated wake
+!                 DO m = 1, n_turb
+!                     IF (SQRT(wake_deficit(m)) < 1.0_wp) THEN
+!                         n_idx = node_idx(m)          
+!                         ! Multiply original free-stream by the wake fraction
+!                         ws_new(m) = site%ws0_ts(n_idx, h_idx(m), t_step) * (1.0_wp - SQRT(wake_deficit(m)))
+!                     ELSE
+!                         ws_new(m) = 0.0_wp
+!                     END IF
+!                 END DO
+
+!                 ! Convergence Check (comparing just the n_turb values)
+!                 IF (MAXVAL(ABS(ws_new - ws_old)) < 1.0E-4_wp) EXIT 
+!             END DO 
+            
+!             ! ----------------------------------------------------------
+!             ! Calculate power using the FINAL converged local speeds
+!             ! ----------------------------------------------------------
+!             tep_farm = 0.0_wp
+!             DO m = 1, n_turb
+!                 t_type = type_turb(m)
+!                 v_local = ws_new(m)
+                
+!                 cp_val = get_coeff(v_local, turbines(t_type)%v_ref, &
+!                                    turbines(t_type)%cp_ref, turbines(t_type)%n_points)
+                
+!                 area = pi * (turbines(t_type)%rotor_diameter / 2.0_wp)**2
+!                 tep_farm = tep_farm + (0.5_wp * rho * area * (v_local**3) * cp_val)
+!             END DO
+            
+!             total_aep = total_aep + tep_farm
+!         END DO
+
+!         total_aep = total_aep / REAL(site%nsteps, wp) ! Average Power (Watts)
+!         total_aep = total_aep * 8760.0_wp / 1.0E9_wp  ! Annual Energy Production (GWh / Year)
+!         ! ind%obj_vals(1) = ind%obj_vals(1) / (total_aep * config%farmlifetime)
+!         ! ind%obj_vals(2) = -total_aep * config%farmlifetime
+!         ! ! --- NEW: Store purely as Raw AEP (Lifetime GWh) ---
+!         ! ind%raw_aep = total_aep * config%farmlifetime
+!         ind%raw_aep = total_aep
+
+!         DEALLOCATE(node_idx, type_turb, ws_new, ws_old, wake_deficit, single_deficit)
+
+!     END SUBROUTINE evaluate_aep
+
+!     ! ==================================================================
+!     ! SUBROUTINE: bastankhah_wake_sparse
+!     ! (Strict mathematical port of original F77 logic)
+!     ! ==================================================================
+!     SUBROUTINE bastankhah_wake_sparse(m, n_idx, t_spec, m_ct1, site, turbines, &
+!                                       n_turb, node_idx, type_turb, t_step, deficit)
+!         TYPE(SiteData),    INTENT(IN)  :: site
+!         TYPE(TurbineSpec), INTENT(IN)  :: turbines(:)
+!         TYPE(TurbineSpec), INTENT(IN)  :: t_spec
+!         INTEGER,           INTENT(IN)  :: m, n_idx, n_turb, t_step
+!         INTEGER,           INTENT(IN)  :: node_idx(:), type_turb(:)
+!         REAL(wp),          INTENT(IN)  :: m_ct1
+!         REAL(wp),          INTENT(OUT) :: deficit(:) ! Now a 1D array of size n_turb
+        
+!         REAL(wp), PARAMETER :: k_star = 0.0324_wp 
+        
+!         REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake
+!         REAL(wp) :: dx, dy, x_rot, y_rot, x_rel
+!         REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord
+!         INTEGER  :: i, j_node, j_type
+!         real(wp) :: m_ct
+        
+!         ! 1. Initialize output deficit array to zero
+!         deficit = 0.0_wp
+        
+!         ! 2. Get properties of the wake-producing turbine (m)
+!         hubX   = site%x_coord(n_idx)
+!         hubY   = site%y_coord(n_idx)
+!         theta  = site%wd0_ts(n_idx, t_step)
+!         d_wake = t_spec%rotor_diameter
+!         h_wake = t_spec%hub_height
+!         m_ct = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
+!         ! 3. Calculate beta
+!         ! (Using MAX to prevent NaN if m_ct somehow hits 1.0)
+!         beta = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
+                                   
+
+!         ! 4. Loop through ONLY the downstream active turbines
+!         DO i = 1, n_turb
+!             ! A turbine cannot wake itself
+!             IF (i == m) CYCLE
+            
+!             j_node = node_idx(i)
+            
+!             ! 5. Calculate rotated coordinates (Exact match to old script)
+!             dx = site%x_coord(j_node) - hubX
+!             dy = site%y_coord(j_node) - hubY
+!             x_rot =  dx * COS(theta) + dy * SIN(theta)
+!             y_rot = -dx * SIN(theta) + dy * COS(theta)
+            
+!             radial_dist = ABS(y_rot)
+!             x_rel = MAX(x_rot, 0.0_wp)
+            
+!             ! 6. Logic Gates: Downstream AND within 3 diameters
+!             IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
+                
+!                 ! Calculate normalized wake diameter
+!                 sigma_d0 = (k_star * x_rel / d_wake) + (0.2_wp * SQRT(beta))
+                
+!                 ! Pre-calculate Gaussian terms
+!                 a1 = m_ct / (8.0_wp * (sigma_d0 ** 2))
+                
+!                 ! --- ANTI-NaN NEAR-WAKE CAP (Restored exactly) ---
+!                 IF (a1 >= 1.0_wp) a1 = 0.999_wp
+                
+!                 b1 = -1.0_wp / (2.0_wp * (sigma_d0 ** 2))
+!                 c2 = (radial_dist / d_wake) ** 2
+                
+!                 ! 7. Calculate height difference specifically for the target turbine
+!                 j_type  = type_turb(i)
+!                 z_coord = turbines(j_type)%hub_height
+!                 c1 = ((z_coord - h_wake) / d_wake) ** 2
+                
+!                 ! 8. Apply exact deficit formula
+!                 deficit(i) = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
+                
+!             END IF
+!         END DO
+!     END SUBROUTINE bastankhah_wake_sparse
+
+    ! ! ==================================================================
+    ! ! SUBROUTINE: bastankhah_wake_dense
+    ! ! Calculates the wake deficit across ALL nodes and ALL height levels
+    ! ! ==================================================================
+    ! SUBROUTINE bastankhah_wake_dense(n_idx, t_spec, m_ct1, site, t_step, deficit)
+    !     TYPE(SiteData),    INTENT(IN)  :: site
+    !     TYPE(TurbineSpec), INTENT(IN)  :: t_spec
+    !     INTEGER,           INTENT(IN)  :: n_idx, t_step
+    !     REAL(wp),          INTENT(IN)  :: m_ct1
+    !     REAL(wp),          INTENT(OUT) :: deficit(:,:) ! 2D: (n_nodes, n_hlevels)
+        
+    !     REAL(wp), PARAMETER :: k_star = 0.0324_wp
+        
+    !     REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake
+    !     REAL(wp) :: dx, dy, x_rot, y_rot, x_rel
+    !     REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord
+    !     INTEGER  :: i, j
+
+    !     real(wp) :: m_ct
+        
+    !     ! 1. Initialize output deficit array to zero
+    !     deficit = 0.0_wp
+        
+    !     ! 2. Get properties of the wake-producing turbine
+    !     hubX   = site%x_coord(n_idx)
+    !     hubY   = site%y_coord(n_idx)
+    !     theta  = site%wd0_ts(n_idx, t_step)
+    !     d_wake = t_spec%rotor_diameter
+    !     h_wake = t_spec%hub_height
+    !     m_ct = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
+    !     ! 3. Calculate beta
+    !     beta = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
+
+    !     ! 4. Loop through EVERY node in the grid
+    !     DO i = 1, site%n_nodes
+            
+    !         ! 5. Calculate rotated coordinates
+    !         dx = site%x_coord(i) - hubX
+    !         dy = site%y_coord(i) - hubY
+    !         x_rot =  dx * COS(theta) + dy * SIN(theta)
+    !         y_rot = -dx * SIN(theta) + dy * COS(theta)
+            
+    !         radial_dist = ABS(y_rot)
+    !         x_rel = MAX(x_rot, 0.0_wp)
+            
+    !         ! 6. Logic Gates: Downstream AND within 3 diameters
+    !         IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
+                
+    !             sigma_d0 = (k_star * x_rel / d_wake) + (0.2_wp * SQRT(beta))
+    !             a1 = m_ct / (8.0_wp * (sigma_d0 ** 2))
+                
+    !             IF (a1 >= 1.0_wp) a1 = 0.999_wp
+                
+    !             b1 = -1.0_wp / (2.0_wp * (sigma_d0 ** 2))
+    !             c2 = (radial_dist / d_wake) ** 2
+                
+    !             ! 7. Calculate deficit for EVERY height level at this node
+    !             DO j = 1, site%n_hlevel
+    !                 z_coord = site%h_level(j)
+    !                 c1 = ((z_coord - h_wake) / d_wake) ** 2
+                    
+    !                 deficit(i, j) = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
+    !             END DO
+    !         END IF
+    !     END DO
+    ! END SUBROUTINE bastankhah_wake_dense
+
+!     ! ==================================================================
+!     ! SUBROUTINE: calculate_3d_wind_field
+!     ! Solves the full 3D wind field for visualization/post-processing
+!     ! ==================================================================
+!     SUBROUTINE calculate_3d_wind_field(ind, site, turbines, config, ws_out)
+!         TYPE(Individual),  INTENT(IN)  :: ind
+!         TYPE(SiteData),    INTENT(IN)  :: site
+!         TYPE(TurbineSpec), INTENT(IN)  :: turbines(:)
+!         TYPE(ConfigData),  INTENT(IN)  :: config
+!         REAL(wp), ALLOCATABLE, INTENT(OUT) :: ws_out(:,:,:) ! (nodes, h_levels, t_steps)
+
+!         INTEGER  :: n_turb, i, j, m, t_step, t_type, n_idx, k_iter
+!         REAL(wp) :: v_local, m_ct
+
+!         ! --- SPARSE ARRAYS (For the wake producers) ---
+!         INTEGER, ALLOCATABLE :: node_idx(:), type_turb(:), h_idx(:)
+        
+!         ! --- DENSE ARRAYS (For the grid convergence) ---
+!         REAL(wp), ALLOCATABLE :: ws_new(:,:), ws_old(:,:)
+!         REAL(wp), ALLOCATABLE :: wake_deficit(:,:), single_deficit(:,:)
+        
+!         ! 1. Extract Active Turbines to Sparse Arrays
+!         n_turb = COUNT(ind%chromosome > 1)
+        
+!         ! Allocate the master output array
+!         ALLOCATE(ws_out(site%n_nodes, site%n_hlevel, site%nsteps))
+
+!         ! Handle Edge Case: Completely empty layout
+!         IF (n_turb == 0) THEN
+!             ws_out = site%ws0_ts  ! Wind is completely undisturbed
+!             RETURN
+!         END IF
+
+!         ALLOCATE(node_idx(n_turb), type_turb(n_turb), h_idx(n_turb))
+!         ALLOCATE(ws_new(site%n_nodes, site%n_hlevel))
+!         ALLOCATE(ws_old(site%n_nodes, site%n_hlevel))
+!         ALLOCATE(wake_deficit(site%n_nodes, site%n_hlevel))
+!         ALLOCATE(single_deficit(site%n_nodes, site%n_hlevel))
+
+!         ! Build the lookup tables for the wake producers
+!         m = 1
+!         DO i = 1, site%n_nodes
+!             t_type = ind%chromosome(i)
+!             IF (t_type > 1) THEN
+!                 node_idx(m)  = i
+!                 type_turb(m) = t_type
+!                 h_idx(m)     = turbines(t_type)%h_idx 
+!                 m = m + 1
+!             END IF
+!         END DO
+
+!         ! --------------------------------------------------------------
+!         ! MAIN TIME-STEP LOOP
+!         ! --------------------------------------------------------------
+!         DO t_step = 1, site%nsteps
+            
+!             ! Initialize the dense wind field for this time step
+!             ws_new = site%ws0_ts(:,:,t_step)
+            
+!             ! ----------------------------------------------------------
+!             ! ALL-TO-ALL ITERATIVE SOLVER
+!             ! ----------------------------------------------------------
+!             DO k_iter = 1, config%max_iter 
+!                 ws_old = ws_new 
+!                 wake_deficit = 0.0_wp
+                
+!                 ! Loop 1: Calculate wakes produced by active turbines
+!                 DO m = 1, n_turb
+!                     t_type = type_turb(m)
+!                     n_idx  = node_idx(m)
+                    
+!                     ! Local wind speed specifically at the turbine's hub
+!                     v_local = ws_new(n_idx, h_idx(m))
+                    
+!                     m_ct = get_coeff(v_local, turbines(t_type)%v_ref, &
+!                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
+                    
+!                     ! Calculate dense deficit field
+!                     CALL bastankhah_wake_dense(n_idx, turbines(t_type), m_ct, site, t_step, single_deficit)
+                    
+!                     wake_deficit = wake_deficit + (single_deficit**2)
+!                 END DO
+
+!                 ! Loop 2: Apply the total aggregated wake to the ENTIRE grid
+!                 DO i = 1, site%n_nodes
+!                     DO j = 1, site%n_hlevel
+!                         IF (SQRT(wake_deficit(i, j)) < 1.0_wp) THEN
+!                             ws_new(i, j) = site%ws0_ts(i, j, t_step) * (1.0_wp - SQRT(wake_deficit(i, j)))
+!                         ELSE
+!                             ws_new(i, j) = 0.0_wp
+!                         END IF
+!                     END DO
+!                 END DO
+
+!                 ! Convergence Check (comparing the dense grid)
+!                 IF (MAXVAL(ABS(ws_new - ws_old)) < 1.0E-4_wp) EXIT 
+!             END DO 
+            
+!             ! Store the converged 3D slice for this time step
+!             ws_out(:,:,t_step) = ws_new
+!         END DO
+
+!         DEALLOCATE(node_idx, type_turb, h_idx)
+!         DEALLOCATE(ws_new, ws_old, wake_deficit, single_deficit)
+
+!     END SUBROUTINE calculate_3d_wind_field
+
+!     ! ==================================================================
+!     ! HELPER FUNCTIONS
+!     ! ==================================================================
+    ! FUNCTION get_coeff(v_in, v_ref, c_ref, n_pts) RESULT(coeff)
+    !     REAL(wp), INTENT(IN) :: v_in
+    !     REAL(wp), INTENT(IN) :: v_ref(:), c_ref(:)
+    !     INTEGER,  INTENT(IN) :: n_pts
+    !     REAL(wp) :: coeff, frac
+    !     INTEGER :: i
+
+    !     coeff = 0.0_wp
+    !     IF (v_in < v_ref(1) .OR. v_in > v_ref(n_pts)) RETURN
+
+    !     DO i = 1, n_pts - 1
+    !         IF (v_in >= v_ref(i) .AND. v_in <= v_ref(i+1)) THEN
+    !             frac = (v_in - v_ref(i)) / (v_ref(i+1) - v_ref(i))
+    !             coeff = c_ref(i) + frac * (c_ref(i+1) - c_ref(i))
+    !             RETURN
+    !         END IF
+    !     END DO
+    ! END FUNCTION get_coeff
+
+! END MODULE power
 
 MODULE NSGA_II
 
     USE precision, ONLY: wp
     USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Individual, Population
-    USE power,     ONLY: evaluate_aep
+    USE physics,   ONLY: evaluate_physics
     USE costs,     ONLY: evaluate_financial_cost
 
     IMPLICIT NONE
@@ -1351,12 +1847,25 @@ CONTAINS
             ELSE
                 ! 1. Calculate raw physics and costs
                 CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
-                CALL evaluate_aep(pop%inds(i), site, turbines, config)
+                CALL evaluate_physics(pop%inds(i), site, turbines, config)
                 
-                ! 2. Explicitly map to NSGA-II objectives 
-                ! (Note: Objective 2 is negated because NSGA-II minimizes all objectives)
-                pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_cost
-                pop%inds(i)%obj_vals(2) = -pop%inds(i)%raw_aep
+                ! 2. Explicitly map Objective 1
+                SELECT CASE(config%obj_1)
+                    CASE(1); pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_cost / &
+                        (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
+                    CASE(2); pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_cost
+                    CASE(3); pop%inds(i)%obj_vals(1) = -pop%inds(i)%raw_aep
+                    CASE(4); pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_fatigue
+                END SELECT
+                
+                ! 3. Explicitly map Objective 2
+                SELECT CASE(config%obj_2)
+                    CASE(1); pop%inds(i)%obj_vals(2) = pop%inds(i)%raw_cost / &
+                        (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
+                    CASE(2); pop%inds(i)%obj_vals(2) = pop%inds(i)%raw_cost
+                    CASE(3); pop%inds(i)%obj_vals(2) = -pop%inds(i)%raw_aep
+                    CASE(4); pop%inds(i)%obj_vals(2) = pop%inds(i)%raw_fatigue
+                END SELECT
             END IF  
         END DO
         !$OMP END PARALLEL DO
@@ -1953,7 +2462,7 @@ MODULE SOGA
     USE precision, ONLY: wp
     USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Individual, Population
     USE NSGA_II,   ONLY: crossover, mutate  ! Reuse physical operators
-    USE power,   ONLY: evaluate_aep
+    USE physics,   ONLY: evaluate_physics
     USE costs,     ONLY: evaluate_financial_cost
 
     IMPLICIT NONE
@@ -1987,23 +2496,22 @@ CONTAINS
                 pop%inds(i)%fitness = HUGE(1.0_wp)  
             ELSE
                 ! --- LAZY EVALUATION ROUTING ---
-                IF (config%obj_target == 1) THEN
-                    ! Target 1: Maximize AEP
-                    CALL evaluate_aep(pop%inds(i), site, turbines, config)
-                    ! Map to fitness (Minimize negative AEP)
-                    pop%inds(i)%fitness = -pop%inds(i)%raw_aep
-                    
-                ELSE IF (config%obj_target == 2) THEN
-                    ! Target 2: Minimize Cost
-                    CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
-                    ! Map to fitness
-                    pop%inds(i)%fitness = pop%inds(i)%raw_cost
-                    
-                ELSE IF (config%obj_target == 3) THEN
-                    ! Target 3: Minimize Fatigue (Placeholder for future)
-                    ! CALL evaluate_fatigue(pop%inds(i), site, turbines, config)
-                    ! pop%inds(i)%fitness = pop%inds(i)%raw_fatigue
-                END IF
+                SELECT CASE(config%obj_1)
+                    CASE(1) ! LCOE
+                        CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
+                        CALL evaluate_physics(pop%inds(i), site, turbines, config)
+                        pop%inds(i)%fitness = pop%inds(i)%raw_cost / &
+                                            (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
+                    CASE(2) ! CAPEX
+                        CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
+                        pop%inds(i)%fitness = pop%inds(i)%raw_cost
+                    CASE(3) ! AEP
+                        CALL evaluate_physics(pop%inds(i), site, turbines, config)
+                        pop%inds(i)%fitness = -pop%inds(i)%raw_aep
+                    CASE(4) ! Fatigue
+                        CALL evaluate_physics(pop%inds(i), site, turbines, config)
+                        pop%inds(i)%fitness = pop%inds(i)%raw_fatigue
+                END SELECT
                 
             END IF  
         END DO
@@ -2146,7 +2654,7 @@ END MODULE SOGA
 module outputs
     USE precision, ONLY: wp
     USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Population
-    USE power,   ONLY: calculate_3d_wind_field
+    USE physics,   ONLY: calculate_3d_wind_field
     
     implicit none
     PRIVATE
@@ -2205,9 +2713,10 @@ contains
     ! SUBROUTINE: save_final_pareto
     ! Saves the complete Pareto front (Rank 1) including chromosomes.
     ! ==================================================================
-    SUBROUTINE save_final_pareto(pop, filename)
+    SUBROUTINE save_final_pareto(pop, filename, config)
         TYPE(Population), INTENT(IN) :: pop
         CHARACTER(LEN=*), INTENT(IN) :: filename
+        TYPE(ConfigData), INTENT(IN) :: config
 
         INTEGER :: i, j, f_unit, ios, n_var
 
@@ -2221,8 +2730,8 @@ contains
             STOP
         END IF
 
-        ! 2. Write dynamic header for the CSV file
-        WRITE(f_unit, '(A)', ADVANCE='NO') 'cost_obj1,aep_obj2'
+        ! Write dynamic header
+        WRITE(f_unit, '(A)', ADVANCE='NO') 'LCOE,raw_cost,raw_aep,raw_fatigue'
         DO j = 1, n_var
             WRITE(f_unit, '(A,I0)', ADVANCE='NO') ',gene_', j
         END DO
@@ -2233,8 +2742,10 @@ contains
             IF (pop%inds(i)%rank == 1) THEN
                 
                 ! Write Objective 1 (Cost) and Objective 2 (+AEP, mathematically restored)
-                WRITE(f_unit, '(F25.1,A,F25.1)', ADVANCE='NO') &
-                    pop%inds(i)%obj_vals(1), ',', -pop%inds(i)%obj_vals(2)
+                WRITE(f_unit, '(F25.1,A,F25.1,A,F25.5,A,F25.5)', ADVANCE='NO') &
+                    pop%inds(i)%raw_cost / (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp)), &
+                    ',', pop%inds(i)%raw_cost, ',', pop%inds(i)%raw_aep, ',', &
+                    pop%inds(i)%raw_fatigue
 
                 ! Write all the genes of its chromosome on the same line
                 DO j = 1, n_var
@@ -2296,7 +2807,7 @@ contains
             
             ! --- Prepare Output File ---
             ! Dynamically name the file based on the objective index
-            WRITE(filename, '("./outputs/animation_data_obj_", I0, ".csv")') obj_idx
+            WRITE(filename, '(A, "animation_data_obj_", I0, ".csv")') TRIM(config%out_dir), obj_idx
             
             OPEN(NEWUNIT=f_unit, FILE=TRIM(filename), STATUS='REPLACE', IOSTAT=ios)
             IF (ios /= 0) THEN
@@ -2463,7 +2974,7 @@ contains
         ! Calculate 3D wind field ONLY for the absolute best individual (Index 1)
         CALL calculate_3d_wind_field(pop%inds(1), site, turbines, config, ws_out)
 
-        OPEN(NEWUNIT=f_unit, FILE='./outputs/animation_data_soga.csv', STATUS='REPLACE', IOSTAT=ios)
+        OPEN(NEWUNIT=f_unit, FILE=TRIM(config%out_dir) // 'animation_data_soga.csv', STATUS='REPLACE', IOSTAT=ios)
 
         WRITE(f_unit, '(A)', ADVANCE='NO') 'time,x,y'
         DO j = 1, site%n_hlevel
@@ -2494,3 +3005,4 @@ contains
     END SUBROUTINE soga_save_animation_data
 
 end module outputs
+
