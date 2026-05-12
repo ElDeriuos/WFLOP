@@ -31,9 +31,15 @@ MODULE types
         INTEGER, ALLOCATABLE :: ub(:)  ! Upper bounds for each gene (node)
         REAL(wp) :: workability   ! The percentage of time the weather allows construction
         
-        ! ---  SOGA ROUTING VARIABLES ---
-        INTEGER  :: opt_mode     ! 1 = Single-Objective (SOGA), 2 = Multi-Objective (NSGA-II)
-        INTEGER  :: obj_target   ! 1 = Maximize AEP (Cost/Wake to be added later)
+        INTEGER  :: opt_mode     ! 1 = SOGA, 2 = MOGA
+        INTEGER  :: obj_1        ! SOGA target, or MOGA Objective 1
+        INTEGER  :: obj_2        ! MOGA Objective 2 (Ignored if SOGA)
+        ! --- File Paths ---
+        CHARACTER(LEN=512) :: f_turb
+        CHARACTER(LEN=512) :: f_wind
+        CHARACTER(LEN=512) :: f_bathy
+        CHARACTER(LEN=512) :: f_dist
+        CHARACTER(LEN=512) :: out_dir
     END TYPE ConfigData
 
     ! ==================================================================
@@ -151,10 +157,16 @@ CONTAINS
         READ(f_unit, *) config%min_turbs
         READ(f_unit, *) config%workability
         
-        ! --- SOGA parameters ---
         READ(f_unit, *) config%opt_mode
-        READ(f_unit, *) config%obj_target
+        READ(f_unit, *) config%obj_1
+        READ(f_unit, *) config%obj_2
         
+        ! Read File Paths
+        READ(f_unit, *) config%f_turb
+        READ(f_unit, *) config%f_wind
+        READ(f_unit, *) config%f_bathy
+        READ(f_unit, *) config%f_dist
+        READ(f_unit, *) config%out_dir
         ! READ(f_unit, *) config%max_iter
         CLOSE(f_unit)
 
@@ -1837,10 +1849,23 @@ CONTAINS
                 CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
                 CALL evaluate_physics(pop%inds(i), site, turbines, config)
                 
-                ! 2. Explicitly map to NSGA-II objectives 
-                ! (Note: Objective 2 is negated because NSGA-II minimizes all objectives)
-                pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_cost / pop%inds(i)%raw_aep  ! Cost per GWh (LCOE-like)
-                pop%inds(i)%obj_vals(2) = - pop%inds(i)%raw_fatigue  ! Negate because we want to maximize fatigue life (or minimize fatigue damage)
+                ! 2. Explicitly map Objective 1
+                SELECT CASE(config%obj_1)
+                    CASE(1); pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_cost / &
+                        (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
+                    CASE(2); pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_cost
+                    CASE(3); pop%inds(i)%obj_vals(1) = -pop%inds(i)%raw_aep
+                    CASE(4); pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_fatigue
+                END SELECT
+                
+                ! 3. Explicitly map Objective 2
+                SELECT CASE(config%obj_2)
+                    CASE(1); pop%inds(i)%obj_vals(2) = pop%inds(i)%raw_cost / &
+                        (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
+                    CASE(2); pop%inds(i)%obj_vals(2) = pop%inds(i)%raw_cost
+                    CASE(3); pop%inds(i)%obj_vals(2) = -pop%inds(i)%raw_aep
+                    CASE(4); pop%inds(i)%obj_vals(2) = pop%inds(i)%raw_fatigue
+                END SELECT
             END IF  
         END DO
         !$OMP END PARALLEL DO
@@ -2471,31 +2496,22 @@ CONTAINS
                 pop%inds(i)%fitness = HUGE(1.0_wp)  
             ELSE
                 ! --- LAZY EVALUATION ROUTING ---
-                IF (config%obj_target == 3) THEN
-                    ! Target 1: Maximize AEP
-                    CALL evaluate_physics(pop%inds(i), site, turbines, config)
-                    ! Map to fitness (Minimize negative AEP)
-                    pop%inds(i)%fitness = -pop%inds(i)%raw_aep
-                    
-                ELSE IF (config%obj_target == 2) THEN
-                    ! Target 2: Minimize Cost
-                    CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
-                    call evaluate_physics(pop%inds(i), site, turbines, config)
-                    ! Map to fitness
-                    pop%inds(i)%fitness = pop%inds(i)%raw_cost
-                
-                ELSE IF (config%obj_target == 1) THEN
-                    ! Target 2: Minimize Cost
-                    CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
-                    call evaluate_physics(pop%inds(i), site, turbines, config)
-                    ! Map to fitness
-                    pop%inds(i)%fitness = pop%inds(i)%raw_cost / pop%inds(i)%raw_aep  ! Cost per GWh (LCOE-like)
-
-                ELSE IF (config%obj_target == 4) THEN
-                    ! Target 3: Minimize Fatigue (Placeholder for future)
-                    call evaluate_physics(pop%inds(i), site, turbines, config)
-                    pop%inds(i)%fitness = -pop%inds(i)%raw_fatigue
-                END IF
+                SELECT CASE(config%obj_1)
+                    CASE(1) ! LCOE
+                        CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
+                        CALL evaluate_physics(pop%inds(i), site, turbines, config)
+                        pop%inds(i)%fitness = pop%inds(i)%raw_cost / &
+                                            (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
+                    CASE(2) ! CAPEX
+                        CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
+                        pop%inds(i)%fitness = pop%inds(i)%raw_cost
+                    CASE(3) ! AEP
+                        CALL evaluate_physics(pop%inds(i), site, turbines, config)
+                        pop%inds(i)%fitness = -pop%inds(i)%raw_aep
+                    CASE(4) ! Fatigue
+                        CALL evaluate_physics(pop%inds(i), site, turbines, config)
+                        pop%inds(i)%fitness = pop%inds(i)%raw_fatigue
+                END SELECT
                 
             END IF  
         END DO
@@ -2697,9 +2713,10 @@ contains
     ! SUBROUTINE: save_final_pareto
     ! Saves the complete Pareto front (Rank 1) including chromosomes.
     ! ==================================================================
-    SUBROUTINE save_final_pareto(pop, filename)
+    SUBROUTINE save_final_pareto(pop, filename, config)
         TYPE(Population), INTENT(IN) :: pop
         CHARACTER(LEN=*), INTENT(IN) :: filename
+        TYPE(ConfigData), INTENT(IN) :: config
 
         INTEGER :: i, j, f_unit, ios, n_var
 
@@ -2713,8 +2730,8 @@ contains
             STOP
         END IF
 
-        ! 2. Write dynamic header for the CSV file
-        WRITE(f_unit, '(A)', ADVANCE='NO') 'cost_obj1,aep_obj2'
+        ! Write dynamic header
+        WRITE(f_unit, '(A)', ADVANCE='NO') 'LCOE,raw_cost,raw_aep,raw_fatigue'
         DO j = 1, n_var
             WRITE(f_unit, '(A,I0)', ADVANCE='NO') ',gene_', j
         END DO
@@ -2725,8 +2742,10 @@ contains
             IF (pop%inds(i)%rank == 1) THEN
                 
                 ! Write Objective 1 (Cost) and Objective 2 (+AEP, mathematically restored)
-                WRITE(f_unit, '(F25.1,A,F25.1)', ADVANCE='NO') &
-                    pop%inds(i)%obj_vals(1), ',', -pop%inds(i)%obj_vals(2)
+                WRITE(f_unit, '(F25.1,A,F25.1,A,F25.5,A,F25.5)', ADVANCE='NO') &
+                    pop%inds(i)%raw_cost / (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp)), &
+                    ',', pop%inds(i)%raw_cost, ',', pop%inds(i)%raw_aep, ',', &
+                    pop%inds(i)%raw_fatigue
 
                 ! Write all the genes of its chromosome on the same line
                 DO j = 1, n_var
@@ -2788,7 +2807,7 @@ contains
             
             ! --- Prepare Output File ---
             ! Dynamically name the file based on the objective index
-            WRITE(filename, '("./outputs/animation_data_obj_", I0, ".csv")') obj_idx
+            WRITE(filename, '(A, "animation_data_obj_", I0, ".csv")') TRIM(config%out_dir), obj_idx
             
             OPEN(NEWUNIT=f_unit, FILE=TRIM(filename), STATUS='REPLACE', IOSTAT=ios)
             IF (ios /= 0) THEN
@@ -2955,7 +2974,7 @@ contains
         ! Calculate 3D wind field ONLY for the absolute best individual (Index 1)
         CALL calculate_3d_wind_field(pop%inds(1), site, turbines, config, ws_out)
 
-        OPEN(NEWUNIT=f_unit, FILE='./outputs/animation_data_soga.csv', STATUS='REPLACE', IOSTAT=ios)
+        OPEN(NEWUNIT=f_unit, FILE=TRIM(config%out_dir) // 'animation_data_soga.csv', STATUS='REPLACE', IOSTAT=ios)
 
         WRITE(f_unit, '(A)', ADVANCE='NO') 'time,x,y'
         DO j = 1, site%n_hlevel
