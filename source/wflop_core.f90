@@ -2669,22 +2669,28 @@ module outputs
 
 contains
 
-    SUBROUTINE save_generational_front(gen_num, pop, filename)
+! ==================================================================
+    ! SUBROUTINE: save_generational_front
+    ! Tracks the Rank 1 individuals at each generation for convergence plotting.
+    ! ==================================================================
+    SUBROUTINE save_generational_front(gen_num, pop, filename, config)
         INTEGER,          INTENT(IN) :: gen_num
         TYPE(Population), INTENT(IN) :: pop
         CHARACTER(LEN=*), INTENT(IN) :: filename
+        TYPE(ConfigData), INTENT(IN) :: config  ! Added to calculate LCOE
         
         INTEGER :: i, f_unit, ios
         
         ! 1. Open File Safely using NEWUNIT
         IF (gen_num == 1) THEN
-            ! First generation: Create/Replace the file and write the header
+            ! First generation: Create/Replace the file and write the dynamic header
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='REPLACE', IOSTAT=ios)
             IF (ios /= 0) THEN
                 PRINT *, "🔴 ERROR: Could not create output file: ", TRIM(filename)
                 STOP
             END IF
-            WRITE(f_unit, '(A)') 'generation,cost_obj1,aep_obj2'
+            ! Output all metrics so Python can dynamically choose which to plot
+            WRITE(f_unit, '(A)') 'generation,LCOE,raw_cost,raw_aep,raw_fatigue'
         ELSE
             ! Subsequent generations: Open the existing file and jump to the bottom
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', POSITION='APPEND', IOSTAT=ios)
@@ -2697,10 +2703,13 @@ contains
         ! 2. Loop through the population and find Front 1
         DO i = 1, SIZE(pop%inds)
             IF (pop%inds(i)%rank == 1) THEN
-                
-                ! Write Generation, Cost, and mathematically restored (+AEP)
-                WRITE(f_unit, '(I0,A,F25.1,A,F25.1)') &
-                    gen_num, ',', pop%inds(i)%obj_vals(1), ',', -pop%inds(i)%obj_vals(2)
+                ! Write Generation, LCOE, Cost, AEP, and Fatigue
+                WRITE(f_unit, '(I0,A,F25.1,A,F25.1,A,F25.1,A,F25.5)') &
+                    gen_num, ',', &
+                    pop%inds(i)%raw_cost / (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp)), ',', &
+                    pop%inds(i)%raw_cost, ',', &
+                    pop%inds(i)%raw_aep, ',', &
+                    pop%inds(i)%raw_fatigue
             END IF
         END DO
         
