@@ -68,7 +68,8 @@ PROGRAM run_moga
         CALL select_survivors(combined_pop, parent_pop, config)
         
         ! 6. Save tracking data for the GUI (Convergence plotting)
-        CALL save_generational_front(generation, parent_pop, TRIM(config%out_dir) // 'generational_fronts.csv')
+        CALL save_generational_front(generation, parent_pop, &
+                TRIM(config%out_dir) // 'generational_fronts.csv', config)
         
     END DO
 

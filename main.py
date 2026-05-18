@@ -131,12 +131,12 @@ class OWFLOGui(ctk.CTk):
         # GA Probabilities
         ctk.CTkLabel(ga_grid, text="Crossover Prob:").grid(row=1, column=0, sticky="e", padx=5, pady=5)
         self.soga_cross = ctk.CTkEntry(ga_grid, width=100)
-        self.soga_cross.insert(0, "0.80")
+        self.soga_cross.insert(0, "0.50")
         self.soga_cross.grid(row=1, column=1, padx=5, pady=5)
 
         ctk.CTkLabel(ga_grid, text="Mutation Prob:").grid(row=1, column=2, sticky="e", padx=(20, 5), pady=5)
         self.soga_mut = ctk.CTkEntry(ga_grid, width=100)
-        self.soga_mut.insert(0, "0.10")
+        self.soga_mut.insert(0, "0.50")
         self.soga_mut.grid(row=1, column=3, padx=5, pady=5)
 
         ctk.CTkLabel(ga_grid, text="Mutation Step (\u03BC):").grid(row=2, column=0, sticky="e", padx=5, pady=5)
@@ -188,21 +188,39 @@ class OWFLOGui(ctk.CTk):
         plot_row = ctk.CTkFrame(viz_frame_soga, fg_color="transparent")
         plot_row.pack(fill="x", pady=(0, 5))
 
-        self.btn_soga_plot = ctk.CTkButton(plot_row, text="📈 Plot Convergence History", state="disabled", command=self.plot_soga_convergence)
+        self.btn_soga_plot = ctk.CTkButton(plot_row, text="📈 Plot Convergence History", state="normal", command=self.plot_soga_convergence)
         self.btn_soga_plot.pack(side="left", padx=(0, 10), expand=True, fill="x")
 
-        self.btn_soga_3d = ctk.CTkButton(plot_row, text="🌐 View Best 3D Layout", state="disabled", command=self.plot_soga_3d)
+        # --- NEW: Z-Scale Entry ---
+        ctk.CTkLabel(plot_row, text="Z-Scale:").pack(side="left", padx=(5, 2))
+        self.soga_z_scale = ctk.CTkEntry(plot_row, width=45)
+        self.soga_z_scale.insert(0, "5.0")
+        self.soga_z_scale.pack(side="left", padx=(0, 5))
+
+        self.btn_soga_3d = ctk.CTkButton(plot_row, text="🌐 View Best 3D Layout", state="normal", command=self.plot_soga_3d)
         self.btn_soga_3d.pack(side="left", expand=True, fill="x")
 
         # Row 2: Animation & Dynamic Height Selection
         anim_row = ctk.CTkFrame(viz_frame_soga, fg_color="transparent")
         anim_row.pack(fill="x", pady=5)
         
-        ctk.CTkLabel(anim_row, text="Height Level:").pack(side="left", padx=(0, 10))
-        self.soga_anim_height_dropdown = ctk.CTkOptionMenu(anim_row, values=["Run optimization first"], state="disabled")
+        ctk.CTkLabel(anim_row, text="Height:").pack(side="left", padx=(0, 2))
+        self.soga_anim_height_dropdown = ctk.CTkOptionMenu(anim_row, values=["Run optimization first"], state="disabled", width=90)
         self.soga_anim_height_dropdown.pack(side="left", padx=(0, 10))
 
-        self.btn_soga_anim = ctk.CTkButton(anim_row, text="🎬 Generate MP4 Flow", state="disabled", command=self.generate_soga_animation)
+        # --- NEW: Frame Step Entry ---
+        ctk.CTkLabel(anim_row, text="Step:").pack(side="left", padx=(0, 2))
+        self.soga_anim_step = ctk.CTkEntry(anim_row, width=40)
+        self.soga_anim_step.insert(0, "1")
+        self.soga_anim_step.pack(side="left", padx=(0, 10))
+
+        # --- NEW: FPS Entry ---
+        ctk.CTkLabel(anim_row, text="FPS:").pack(side="left", padx=(0, 2))
+        self.soga_anim_fps = ctk.CTkEntry(anim_row, width=40)
+        self.soga_anim_fps.insert(0, "10")
+        self.soga_anim_fps.pack(side="left", padx=(0, 10))
+
+        self.btn_soga_anim = ctk.CTkButton(anim_row, text="🎬 Generate MP4 Flow", state="normal", command=self.generate_soga_animation)
         self.btn_soga_anim.pack(side="left", expand=True, fill="x")
 
     def build_moga_tab(self):
@@ -228,17 +246,17 @@ class OWFLOGui(ctk.CTk):
 
         ctk.CTkLabel(ga_grid, text="Crossover Prob:").grid(row=1, column=0, sticky="e", padx=5, pady=5)
         self.moga_cross = ctk.CTkEntry(ga_grid, width=100)
-        self.moga_cross.insert(0, "0.90")
+        self.moga_cross.insert(0, "0.50")
         self.moga_cross.grid(row=1, column=1, padx=5, pady=5)
 
         ctk.CTkLabel(ga_grid, text="Mutation Prob:").grid(row=1, column=2, sticky="e", padx=(20, 5), pady=5)
         self.moga_mut = ctk.CTkEntry(ga_grid, width=100)
-        self.moga_mut.insert(0, "0.15")
+        self.moga_mut.insert(0, "0.50")
         self.moga_mut.grid(row=1, column=3, padx=5, pady=5)
 
         ctk.CTkLabel(ga_grid, text="Mutation Step (\u03BC):").grid(row=2, column=0, sticky="e", padx=5, pady=5)
         self.moga_mu = ctk.CTkEntry(ga_grid, width=100)
-        self.moga_mu.insert(0, "0.05")
+        self.moga_mu.insert(0, "0.08")
         self.moga_mu.grid(row=2, column=1, padx=5, pady=5)
 
         # MOGA Objectives
@@ -287,23 +305,41 @@ class OWFLOGui(ctk.CTk):
         plot_row = ctk.CTkFrame(viz_frame_moga, fg_color="transparent")
         plot_row.pack(fill="x", pady=(0, 5))
         
-        self.btn_moga_pareto = ctk.CTkButton(plot_row, text="📊 Plot Pareto Front", state="disabled", command=self.plot_moga_pareto)
+        self.btn_moga_pareto = ctk.CTkButton(plot_row, text="📊 Plot Pareto Front", state="normal", command=self.plot_moga_pareto)
         self.btn_moga_pareto.pack(side="left", padx=(0, 10), expand=True, fill="x")
 
-        self.btn_moga_3d = ctk.CTkButton(plot_row, text="🌐 View Extreme 3D Layouts", state="disabled", command=self.plot_moga_3d)
+        # --- NEW: Z-Scale Entry ---
+        ctk.CTkLabel(plot_row, text="Z-Scale:").pack(side="left", padx=(5, 2))
+        self.moga_z_scale = ctk.CTkEntry(plot_row, width=45)
+        self.moga_z_scale.insert(0, "5.0")
+        self.moga_z_scale.pack(side="left", padx=(0, 5))
+
+        self.btn_moga_3d = ctk.CTkButton(plot_row, text="🌐 View Extreme 3D Layouts", state="normal", command=self.plot_moga_3d)
         self.btn_moga_3d.pack(side="left", expand=True, fill="x")
 
-        # Row 2: Animation & Dynamic Height Selection
+        # Row 2: Animation Settings & Button (All on one line)
         anim_row = ctk.CTkFrame(viz_frame_moga, fg_color="transparent")
         anim_row.pack(fill="x", pady=5)
         
-        ctk.CTkLabel(anim_row, text="Height Level:").pack(side="left", padx=(0, 10))
-        
-        # Starts with a placeholder. We will dynamically update this later!
-        self.anim_height_dropdown = ctk.CTkOptionMenu(anim_row, values=["Run optimization first"], state="disabled")
-        self.anim_height_dropdown.pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(anim_row, text="Height:").pack(side="left", padx=(0, 2))
+        self.anim_height_dropdown = ctk.CTkOptionMenu(anim_row, values=["Run optimization first"], state="normal", width=90)
+        self.anim_height_dropdown.pack(side="left", padx=(0, 5))
 
-        self.btn_moga_anim = ctk.CTkButton(anim_row, text="🎬 Generate Flow Animation", state="disabled", command=self.generate_moga_animation)
+        ctk.CTkLabel(anim_row, text="Layout:").pack(side="left", padx=(0, 2))
+        self.moga_anim_layout = ctk.CTkOptionMenu(anim_row, values=["Best Obj 1", "Best Obj 2"], width=100)
+        self.moga_anim_layout.pack(side="left", padx=(0, 5))
+
+        ctk.CTkLabel(anim_row, text="Step:").pack(side="left", padx=(0, 2))
+        self.moga_anim_step = ctk.CTkEntry(anim_row, width=40)
+        self.moga_anim_step.insert(0, "1")
+        self.moga_anim_step.pack(side="left", padx=(0, 5))
+
+        ctk.CTkLabel(anim_row, text="FPS:").pack(side="left", padx=(0, 2))
+        self.moga_anim_fps = ctk.CTkEntry(anim_row, width=40)
+        self.moga_anim_fps.insert(0, "10")
+        self.moga_anim_fps.pack(side="left", padx=(0, 10))
+
+        self.btn_moga_anim = ctk.CTkButton(anim_row, text="🎬 Generate Flow Animation", state="normal", command=self.generate_moga_animation)
         self.btn_moga_anim.pack(side="left", expand=True, fill="x")
 
     def build_farm_setup_tab(self):
@@ -807,27 +843,40 @@ class OWFLOGui(ctk.CTk):
     # --- SOGA Visualization Callbacks ---
     def plot_soga_convergence(self):
         target_obj = self.soga_target.get() # Grab the objective name
-        self.log(f"📈 Generating SOGA Convergence Plot for {target_obj}...")
-        self.btn_soga_plot.configure(state="disabled")
+        out_dir = self.path_out.get()       # Grab the dynamic output path
+        
+        self.log(f"📈 Generating SOGA Convergence Plot for {target_obj} in {out_dir}...")
+        self.btn_soga_plot.configure(state="normal")
         
         def worker():
-            out_img = visualizer.save_soga_convergence_plot(target_obj=target_obj)
+            # Pass BOTH the dynamic output directory and the target objective
+            out_img = visualizer.save_soga_convergence_plot(output_dir=out_dir, target_obj=target_obj)
             if out_img:
                 try:
                     if sys.platform == "win32": os.startfile(os.path.normpath(out_img))
                     else: subprocess.run(["xdg-open", out_img])
                 except Exception: pass
             self.after(0, lambda: self.btn_soga_plot.configure(state="normal"))
+            
         threading.Thread(target=worker, daemon=True).start()
 
     def plot_soga_3d(self):
-        target_obj = self.soga_target.get() # Grab the objective name
-        self.log(f"🌐 Launching SOGA 3D PyVista Viewer for {target_obj}...")
-        self.btn_soga_3d.configure(state="disabled")
+        target_obj = self.soga_target.get()
+        turb_file = self.path_turb.get() # Get the turbine data path
+        try:
+            z_scale = float(self.soga_z_scale.get())
+        except ValueError:
+            z_scale = 5.0 # Fallback default
+            
+        self.log(f"🌐 Launching SOGA 3D Viewer (Z-Scale: {z_scale}x)...")
+        self.btn_soga_3d.configure(state="normal")
         
         def worker():
-            try: visualizer.generate_soga_3d_layout(target_obj=target_obj)
-            except Exception as e: self.log(f"🔴 Error in 3D viewer: {e}")
+            try: 
+                # Pass the new parameters to visualizer
+                visualizer.generate_soga_3d_layout(target_obj=target_obj, z_scale=z_scale, turb_path=turb_file)
+            except Exception as e: 
+                self.log(f"🔴 Error in 3D viewer: {e}")
             self.after(0, lambda: self.btn_soga_3d.configure(state="normal"))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -835,11 +884,26 @@ class OWFLOGui(ctk.CTk):
         selected = self.soga_anim_height_dropdown.get()
         if "Level" not in selected: return
         level_idx = int(selected.replace("Level ", ""))
-        self.log(f"🎬 Generating SOGA MP4 animation for {selected}...")
-        self.btn_soga_anim.configure(state="disabled")
+        out_dir = self.path_out.get() # Dynamic output path
+
+        try:
+            user_step = int(self.soga_anim_step.get())
+            user_fps = int(self.soga_anim_fps.get())
+        except ValueError:
+            user_step, user_fps = 1, 10 # Fallbacks
+            
+        self.log(f"🎬 Generating SOGA MP4 animation for {selected} (Step: {user_step}, FPS: {user_fps})...")
+        self.btn_soga_anim.configure(state="normal")
+        
         def worker():
             try:
-                out_mp4 = visualizer.generate_soga_mp4_animation(level_idx=level_idx)
+                # Assuming visualizer.generate_soga_mp4_animation was updated similarly to accept these
+                out_mp4 = visualizer.generate_soga_mp4_animation(
+                    file_path=os.path.join(out_dir, 'animation_data_soga.csv'), 
+                    level_idx=level_idx, 
+                    frame_step=user_step, 
+                    fps=user_fps
+                )
                 if out_mp4:
                     if sys.platform == "win32": os.startfile(os.path.normpath(out_mp4))
                     else: subprocess.run(["xdg-open", out_mp4])
@@ -1018,36 +1082,49 @@ class OWFLOGui(ctk.CTk):
     # ==========================================
 
     def plot_moga_pareto(self):
-        self.log("📊 Generating Pareto Front plots...")
-        self.btn_moga_pareto.configure(state="disabled")
+        out_dir = self.path_out.get() # Grab the dynamic output path
+        self.log(f"📊 Generating Pareto Front plots in {out_dir}...")
+        self.btn_moga_pareto.configure(state="normal")
         
         def worker():
-            success = visualizer.save_pareto_plots()
+            # Pass the dynamic output directory to the visualizer
+            success = visualizer.save_pareto_plots(output_dir=out_dir)
             if success:
-                self.log("✅ Pareto plots saved to ./outputs/")
-                # --- Auto-open BOTH images ---
+                self.log(f"✅ Pareto plots saved to {out_dir}")
+                
+                # --- Auto-open BOTH images using dynamic paths ---
+                img1_path = os.path.join(out_dir, "plot_final_pareto.png")
+                img2_path = os.path.join(out_dir, "plot_evolution.png")
+                
                 try:
                     if sys.platform == "win32":
-                        os.startfile(os.path.normpath("./outputs/plot_final_pareto.png"))
-                        os.startfile(os.path.normpath("./outputs/plot_evolution.png"))
+                        os.startfile(os.path.normpath(img1_path))
+                        os.startfile(os.path.normpath(img2_path))
                     else:
                         import subprocess
-                        subprocess.run(["xdg-open", "./outputs/plot_final_pareto.png"])
-                        subprocess.run(["xdg-open", "./outputs/plot_evolution.png"])
+                        subprocess.run(["xdg-open", img1_path])
+                        subprocess.run(["xdg-open", img2_path])
                 except Exception:
                     pass
+                    
             self.after(0, lambda: self.btn_moga_pareto.configure(state="normal"))
             
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
     def plot_moga_3d(self):
-        self.log("🌐 Launching 3D PyVista Viewer (this may take a moment)...")
-        self.btn_moga_3d.configure(state="disabled")
+        turb_file = self.path_turb.get()
+        try:
+            z_scale = float(self.moga_z_scale.get())
+        except ValueError:
+            z_scale = 5.0
+            
+        self.log(f"🌐 Launching 3D Viewer (Z-Scale: {z_scale}x)...")
+        self.btn_moga_3d.configure(state="normal")
         
         def worker():
             try:
-                visualizer.generate_3d_comparison()
+                visualizer.generate_3d_comparison(z_scale=z_scale, turb_path=turb_file)
             except Exception as e:
                 self.log(f"🔴 Error in 3D viewer: {e}")
             self.after(0, lambda: self.btn_moga_3d.configure(state="normal"))
@@ -1056,26 +1133,40 @@ class OWFLOGui(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
 
     def generate_moga_animation(self):
-        selected = self.anim_height_dropdown.get()
-        if "Level" not in selected:
-            return
-            
-        level_idx = int(selected.replace("Level ", ""))
-        self.log(f"🎬 Generating MP4 animation for {selected} (Please wait)...")
+        selected_height = self.anim_height_dropdown.get()
+        if "Level" not in selected_height: return
+        level_idx = int(selected_height.replace("Level ", ""))
+        out_dir = self.path_out.get() # Dynamic output path
+        
+        # Determine which file to read based on the dropdown
+        selected_layout = self.moga_anim_layout.get()
+        obj_num = "1" if "Obj 1" in selected_layout else "2"
+        
+        try:
+            user_step = int(self.moga_anim_step.get())
+            user_fps = int(self.moga_anim_fps.get())
+        except ValueError:
+            user_step, user_fps = 1, 10 # Fallbacks
+
+        self.log(f"🎬 Generating MP4 animation for {selected_layout} at {selected_height} (Step: {user_step}, FPS: {user_fps})...")
         self.btn_moga_anim.configure(state="disabled")
         
         def worker():
             try:
-                # Call the updated MP4 function
-                out_mp4 = visualizer.generate_mp4_animation('./outputs/animation_data_obj_1.csv', level_idx=level_idx, fast_mode=False)
+                # Dynamically construct the file path based on objective choice
+                data_path = os.path.join(out_dir, f'animation_data_obj_{obj_num}.csv')
+                
+                out_mp4 = visualizer.generate_mp4_animation(
+                    file_path=data_path, 
+                    level_idx=level_idx, 
+                    fast_mode=False, 
+                    frame_step=user_step, 
+                    fps=user_fps
+                )
                 if out_mp4:
                     self.log(f"✅ Animation saved to {out_mp4}")
-                    # Auto-open the MP4 in the default media player
-                    if sys.platform == "win32":
-                        os.startfile(os.path.normpath(out_mp4))
-                    else:
-                        import subprocess
-                        subprocess.run(["xdg-open", out_mp4])
+                    if sys.platform == "win32": os.startfile(os.path.normpath(out_mp4))
+                    else: subprocess.run(["xdg-open", out_mp4])
             except Exception as e:
                 self.log(f"🔴 Error generating animation: {e}")
             self.after(0, lambda: self.btn_moga_anim.configure(state="normal"))
