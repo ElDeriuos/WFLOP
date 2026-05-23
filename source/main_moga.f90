@@ -34,7 +34,7 @@ PROGRAM run_moga
     
     ! 2. Load static data
     CALL load_turbines(config%f_turb, turbines, site)
-    CALL load_site_data(config%f_wind, config%f_bathy, config%f_dist, site, config)
+    CALL load_site_data(config%f_wind1, config%f_wind2, config%f_bathy, config%f_dist, site, config)
 
     ! 3. Generate and evaluate the initial random population (P0)
     CALL init_random_seed()                     

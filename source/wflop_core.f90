@@ -13,6 +13,12 @@ MODULE types
     IMPLICIT NONE
 
     ! ==================================================================
+    ! WIND RESOURCE MODE CONSTANTS
+    ! ==================================================================
+    ! These constants keep config/input/physics branches readable.
+    INTEGER, PARAMETER :: WIND_MODE_TIMESERIES = 1
+    INTEGER, PARAMETER :: WIND_MODE_ROSE       = 2
+    ! ==================================================================
     ! 1. CONFIGURATION DATA
     ! Holds parameters read from 'config.inp' or the GUI
     ! ==================================================================
@@ -34,9 +40,13 @@ MODULE types
         INTEGER  :: opt_mode     ! 1 = SOGA, 2 = MOGA
         INTEGER  :: obj_1        ! SOGA target, or MOGA Objective 1
         INTEGER  :: obj_2        ! MOGA Objective 2 (Ignored if SOGA)
+        INTEGER  :: wind_mode    ! 1 = Time-Series, 2 = Wind Rose Binning
+
         ! --- File Paths ---
         CHARACTER(LEN=512) :: f_turb
-        CHARACTER(LEN=512) :: f_wind
+        CHARACTER(LEN=512) :: f_mesh
+        CHARACTER(LEN=512) :: f_wind1
+        CHARACTER(LEN=512) :: f_wind2
         CHARACTER(LEN=512) :: f_bathy
         CHARACTER(LEN=512) :: f_dist
         CHARACTER(LEN=512) :: out_dir
@@ -64,6 +74,21 @@ MODULE types
         ! Wind Time-Series: Dimensions (node, height_level, time_step)
         REAL(wp), ALLOCATABLE :: ws0_ts(:,:,:) ! Free-stream wind speed
         REAL(wp), ALLOCATABLE :: wd0_ts(:,:)   ! Free-stream wind direction
+
+        ! --------------------------------------------------------------
+        ! Wind Rose Binning Data
+        ! --------------------------------------------------------------
+        INTEGER :: n_rose_states = 0
+
+        REAL(wp), ALLOCATABLE :: rose_wd_deg(:)    ! Wind direction [deg], diagnostic/original
+        REAL(wp), ALLOCATABLE :: rose_wd_rad(:)    ! Wind direction [rad], solver-ready
+        REAL(wp), ALLOCATABLE :: rose_ws_10m(:)    ! Reference wind speed at 10 m [m/s]
+        REAL(wp), ALLOCATABLE :: rose_prob(:)      ! Probability mass of each wind state [-]
+
+        ! Hub-height-expanded wind speed for rose mode:
+        ! Dimensions: (height_level, rose_state)
+        REAL(wp), ALLOCATABLE :: rose_ws_hub(:,:)  ! Wind speed at each hub-height level [m/s]
+
     END TYPE SiteData
 
     ! ==================================================================
@@ -118,7 +143,8 @@ END MODULE types
 MODULE inputs
 
     USE precision, ONLY: wp
-    USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Population
+    USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Population, &
+                 WIND_MODE_TIMESERIES, WIND_MODE_ROSE
 
         
     IMPLICIT NONE
@@ -160,15 +186,23 @@ CONTAINS
         READ(f_unit, *) config%opt_mode
         READ(f_unit, *) config%obj_1
         READ(f_unit, *) config%obj_2
+        READ(f_unit, *) config%wind_mode
         
         ! Read File Paths
         READ(f_unit, *) config%f_turb
-        READ(f_unit, *) config%f_wind
+        READ(f_unit, *) config%f_mesh
+        READ(f_unit, *) config%f_wind1
+        READ(f_unit, *) config%f_wind2
         READ(f_unit, *) config%f_bathy
         READ(f_unit, *) config%f_dist
         READ(f_unit, *) config%out_dir
         ! READ(f_unit, *) config%max_iter
         CLOSE(f_unit)
+        IF (config%wind_mode /= WIND_MODE_TIMESERIES .AND. &
+            config%wind_mode /= WIND_MODE_ROSE) THEN
+            PRINT *, "🔴 ERROR: Invalid wind_mode in config.inp: ", config%wind_mode
+            STOP 1
+        END IF
 
         ! Default
         config%n_obj = 2
@@ -273,8 +307,8 @@ CONTAINS
     ! ==================================================================
     ! SUBROUTINE 3: Load Mesh, Bathymetry, and Wind Data
     ! ==================================================================
-    SUBROUTINE load_site_data(file_wind, file_depth, file_shore, site, config)
-        CHARACTER(LEN=*), INTENT(IN) :: file_wind, file_depth, file_shore
+    SUBROUTINE load_site_data(file_wind1, file_wind2, file_depth, file_shore, site, config)
+        CHARACTER(LEN=*), INTENT(IN) :: file_wind1, file_wind2, file_depth, file_shore
         TYPE(ConfigData), INTENT(INOUT) :: config
         TYPE(SiteData), INTENT(INOUT) :: site
 
@@ -289,79 +323,80 @@ CONTAINS
 
         PRINT *, "Loading site data (this may take a moment)..."
 
-        ! 1. Read the wind data header to get dimensions
-        OPEN(NEWUNIT=f_unit, FILE=file_wind, STATUS='OLD', IOSTAT=ios)
-        IF (ios /= 0) STOP "🔴 ERROR: Missing filtered_wind.txt"
-        
-        READ(f_unit, *) ! Skip headers
-        READ(f_unit, *) 
-        READ(f_unit, *) site%n_nodes, site%nsteps
+        ! 1. Read mesh coordinates
+        CALL load_mesh_coordinates(config%f_mesh, site, config)
 
-        ! 2. DYNAMIC MEMORY: Allocate coordinate arrays now that we know n_nodes
-        ALLOCATE(site%x_coord(site%n_nodes))
-        ALLOCATE(site%y_coord(site%n_nodes))
-        ALLOCATE(site%z_coord(site%n_nodes))
-        ! Allocate bounds based on the total number of grid nodes
-        ALLOCATE(config%lb(site%n_nodes))
-        ALLOCATE(config%ub(site%n_nodes))
-
-        ! By default, allow the Dummy Turbine (1) up to the Maximum Turbine Type
-        DO i = 1, site%n_nodes
-            config%lb(i) = 1
-            config%ub(i) = site%n_types
-        END DO
-
-        ! Read coordinates directly from this file
-        DO i = 1, site%n_nodes
-            READ(f_unit, *) dummy_int, site%x_coord(i), site%y_coord(i)
-        END DO
-        
-        ! --------------------------------------------------------------
-        ! 3. DYNAMIC MEMORY: Allocate Wind Time-Series Arrays
-        ! --------------------------------------------------------------
-        ! print*, site%n_nodes, site%n_hlevel, site%nsteps
-        ALLOCATE(site%ws0_ts(site%n_nodes, site%n_hlevel, site%nsteps))
-        ALLOCATE(site%wd0_ts(site%n_nodes, site%nsteps))        
-        ! --------------------------------------------------------------
-        ! 4. Parse the Time Series Data
-        ! --------------------------------------------------------------
-        DO t_step = 1, site%nsteps
-            ! Your Python script writes the time step index first (e.g., "     1")
-            READ(f_unit, *) dummy_int 
+        IF (config%wind_mode == WIND_MODE_TIMESERIES) THEN
+                    ! 1. Read the wind data header to get dimensions
+            OPEN(NEWUNIT=f_unit, FILE=file_wind1, STATUS='OLD', IOSTAT=ios)
+            IF (ios /= 0) STOP "🔴 ERROR: Missing filtered_wind.txt"
             
-            DO i = 1, site%n_nodes
-                ! Read the U and V components for this specific node
-                READ(f_unit, *) u_val, v_val
-                
-                ! Calculate wind speed magnitude
-                ws_mag = SQRT((u_val**2) + (v_val**2))
-                
-                ! Calculate wind direction (Meteorological convention from North)
-                wd_rad = ATAN2(u_val, v_val)
-                IF (wd_rad < 0.0_wp) wd_rad = wd_rad + (2.0_wp * PI)
-                
-                site%wd0_ts(i, t_step) = wd_rad
+            READ(f_unit, *) ! Skip headers
+            READ(f_unit, *) 
+            READ(f_unit, *) dummy_int, site%nsteps
+            IF (dummy_int /= site%n_nodes) THEN
+                PRINT *, " ERROR: Mesh node count mismatch."
+                PRINT *, "   windfarm_rocol nodes = ", site%n_nodes
+                PRINT *, "   filtered_wind nodes  = ", dummy_int
+                STOP 1
+            END IF
 
-                ! Power Law 
-                DO j = 1, site%n_hlevel
-                    site%ws0_ts(i, j, t_step) = ws_mag * ((site%h_level(j) / 10.0_wp) ** alpha)
+            ! Read coordinates directly from this file
+            DO i = 1, site%n_nodes
+                READ(f_unit, *) 
+            END DO
+            ! --------------------------------------------------------------
+            ! 2. DYNAMIC MEMORY: Allocate Wind Time-Series Arrays
+            ! --------------------------------------------------------------
+            ! print*, site%n_nodes, site%n_hlevel, site%nsteps
+            ALLOCATE(site%ws0_ts(site%n_nodes, site%n_hlevel, site%nsteps))
+            ALLOCATE(site%wd0_ts(site%n_nodes, site%nsteps))        
+            ! --------------------------------------------------------------
+            ! 4. Parse the Time Series Data
+            ! --------------------------------------------------------------
+            DO t_step = 1, site%nsteps
+                ! Your Python script writes the time step index first (e.g., "     1")
+                READ(f_unit, *) dummy_int 
+                
+                DO i = 1, site%n_nodes
+                    ! Read the U and V components for this specific node
+                    READ(f_unit, *) u_val, v_val
+                    
+                    ! Calculate wind speed magnitude
+                    ws_mag = SQRT((u_val**2) + (v_val**2))
+                    
+                    ! Calculate wind direction (Meteorological convention from North)
+                    wd_rad = ATAN2(u_val, v_val)
+                    IF (wd_rad < 0.0_wp) wd_rad = wd_rad + (2.0_wp * PI)
+                    
+                    site%wd0_ts(i, t_step) = wd_rad
+
+                    ! Power Law 
+                    DO j = 1, site%n_hlevel
+                        site%ws0_ts(i, j, t_step) = ws_mag * ((site%h_level(j) / 10.0_wp) ** alpha)
+                    END DO
                 END DO
             END DO
-        END DO
-        
-        CLOSE(f_unit)
+
+            CLOSE(f_unit)
+
+        ELSE IF (config%wind_mode == WIND_MODE_ROSE) THEN
+            CALL load_wind_rose_data(file_wind2, site)
+            ! For compatibility with previous physics loop
+            site%nsteps = site%n_rose_states 
+        END IF
 
         OPEN(NEWUNIT=f_unit, FILE=file_shore, STATUS='OLD', IOSTAT=ios)
         read(f_unit, *) site%d_shore, site%d_landfall, site%d_port
         CLOSE(f_unit)
 
-        PRINT *, "✅ Site spatial and wind data loaded."
+        PRINT *, " Site spatial and wind data loaded."
 
         ! --------------------------------------------------------------
         ! 5. Read Bathymetry (Depth)
         ! --------------------------------------------------------------
         OPEN(NEWUNIT=f_unit, FILE=file_depth, STATUS='OLD', IOSTAT=ios)
-        IF (ios /= 0) STOP "🔴 ERROR: Missing farm_bathymetry.dat"
+        IF (ios /= 0) STOP " ERROR: Missing farm_bathymetry.dat"
         
         do i= 1, 9
             READ(f_unit, *) ! Skip headers
@@ -375,6 +410,65 @@ CONTAINS
     ! ==================================================================
     ! PRIVATE HELPER ROUTINES
     ! ==================================================================
+    SUBROUTINE load_wind_rose_data(filename, site)
+        CHARACTER(LEN=*), INTENT(IN)    :: filename
+        TYPE(SiteData),   INTENT(INOUT) :: site
+
+        INTEGER :: f_unit, ios, i, j
+        REAL(wp), PARAMETER :: PI = 3.141592653589793_wp
+        REAL(wp), PARAMETER :: alpha = 1.0_wp / 7.0_wp
+        REAL(wp) :: prob_sum
+
+        OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+        IF (ios /= 0) THEN
+            PRINT *, "ERROR: Missing wind_rose_matrix.dat: ", TRIM(filename)
+            STOP 1
+        END IF
+
+        READ(f_unit, *, IOSTAT=ios) site%n_rose_states
+        IF (ios /= 0 .OR. site%n_rose_states <= 0) THEN
+            PRINT *, "ERROR: Invalid number of wind-rose states."
+            STOP 1
+        END IF
+
+        ALLOCATE(site%rose_wd_deg(site%n_rose_states))
+        ALLOCATE(site%rose_wd_rad(site%n_rose_states))
+        ALLOCATE(site%rose_ws_10m(site%n_rose_states))
+        ALLOCATE(site%rose_prob(site%n_rose_states))
+        ALLOCATE(site%rose_ws_hub(site%n_hlevel, site%n_rose_states))
+
+        prob_sum = 0.0_wp
+
+        DO i = 1, site%n_rose_states
+            READ(f_unit, *, IOSTAT=ios) site%rose_wd_deg(i), &
+                                        site%rose_ws_10m(i), &
+                                        site%rose_prob(i)
+
+            IF (ios /= 0) THEN
+                PRINT *, "ERROR: Failed reading wind-rose state ", i
+                STOP 1
+            END IF
+
+            site%rose_wd_rad(i) = site%rose_wd_deg(i) * PI / 180.0_wp
+
+            DO j = 1, site%n_hlevel
+                site%rose_ws_hub(j, i) = site%rose_ws_10m(i) * &
+                    ((site%h_level(j) / 10.0_wp) ** alpha) ! Power law for hub-height expansion
+            END DO
+
+            prob_sum = prob_sum + site%rose_prob(i)
+        END DO
+
+        CLOSE(f_unit)
+
+        IF (ABS(prob_sum - 1.0_wp) > 1.0E-3_wp) THEN
+            PRINT *, " WARNING: Wind-rose probability sum = ", prob_sum
+            PRINT *, " Expected approximately 1.0. Check bin filtering/tolerance."
+        END IF
+
+        PRINT *, " Loaded wind-rose states: ", site%n_rose_states
+    END SUBROUTINE load_wind_rose_data
+
     SUBROUTINE read_turbine_curve(filepath, t_spec)
         CHARACTER(LEN=*),  INTENT(IN)    :: filepath
         TYPE(TurbineSpec), INTENT(INOUT) :: t_spec
@@ -419,6 +513,71 @@ CONTAINS
         
         CLOSE(u)
     END SUBROUTINE read_turbine_curve
+    SUBROUTINE load_mesh_coordinates(filename, site, config)
+        CHARACTER(LEN=*), INTENT(IN)    :: filename
+        TYPE(SiteData),   INTENT(INOUT) :: site
+        TYPE(ConfigData), INTENT(INOUT) :: config
+
+        INTEGER :: f_unit, ios
+        INTEGER :: i
+        INTEGER :: n_rows, n_cols, n_cells
+        REAL(wp) :: dx_dummy, dy_dummy
+
+        OPEN(NEWUNIT=f_unit, FILE=TRIM(filename), STATUS='OLD', ACTION='READ', IOSTAT=ios)
+        IF (ios /= 0) THEN
+            PRINT *, " ERROR: Could not open mesh file: ", TRIM(filename)
+            STOP 1
+        END IF
+
+        READ(f_unit, *, IOSTAT=ios) dx_dummy, dy_dummy
+        IF (ios /= 0) THEN
+            PRINT *, " ERROR: Failed reading mesh spacing from windfarm_rocol."
+            STOP 1
+        END IF
+
+        READ(f_unit, *)        ! skip line 2
+        READ(f_unit, *) n_rows
+
+        DO i = 1, n_rows
+            READ(f_unit, *)
+        END DO
+
+        READ(f_unit, *) n_cols
+
+        DO i = 1, n_cols
+            READ(f_unit, *)
+        END DO
+
+        READ(f_unit, *) site%n_nodes, n_cells
+
+        IF (ALLOCATED(site%x_coord)) DEALLOCATE(site%x_coord)
+        IF (ALLOCATED(site%y_coord)) DEALLOCATE(site%y_coord)
+        IF (ALLOCATED(site%z_coord)) DEALLOCATE(site%z_coord)
+
+        ALLOCATE(site%x_coord(site%n_nodes))
+        ALLOCATE(site%y_coord(site%n_nodes))
+        ALLOCATE(site%z_coord(site%n_nodes))
+        ALLOCATE(config%lb(site%n_nodes))
+        ALLOCATE(config%ub(site%n_nodes))
+
+        DO i = 1, site%n_nodes
+            config%lb(i) = 1
+            config%ub(i) = site%n_types
+        END DO
+
+        DO i = 1, site%n_nodes
+            READ(f_unit, *, IOSTAT=ios) site%x_coord(i), site%y_coord(i)
+            IF (ios /= 0) THEN
+                PRINT *, " ERROR: Failed reading mesh node ", i
+                STOP 1
+            END IF
+        END DO
+
+        CLOSE(f_unit)
+
+        PRINT *, " Loaded mesh coordinates from: ", TRIM(filename)
+        PRINT *, "   Number of mesh nodes: ", site%n_nodes
+    END SUBROUTINE load_mesh_coordinates
 
 END MODULE inputs
 
@@ -815,7 +974,8 @@ END MODULE costs
 MODULE physics
 
     USE precision, ONLY: wp
-    USE types,     ONLY: SiteData, TurbineSpec, Individual, ConfigData
+    USE types, ONLY: SiteData, TurbineSpec, Individual, ConfigData, &
+                 WIND_MODE_TIMESERIES, WIND_MODE_ROSE
     
     IMPLICIT NONE
     PRIVATE
@@ -823,6 +983,7 @@ MODULE physics
     ! Expose ONLY the top-level evaluation routines
     PUBLIC :: evaluate_physics
     PUBLIC :: calculate_3d_wind_field
+    public :: get_ambient_wd
 
     ! ==================================================================
     ! TEMPORARY HARDCODED FATIGUE & ENVIRONMENTAL PARAMETERS (Yang 2025)
@@ -863,6 +1024,7 @@ CONTAINS
 
         INTEGER :: n_turb, i, m, t_step, t_type, n_idx, k_iter
         REAL(wp) :: total_aep, tep_farm, v_local, i_local, cp_val, area, m_ct
+        REAL(wp) :: p_env, env_hours
         REAL(wp) :: F_mean, F_peak, sig_mean, sig_max, sig_a, sig_m, sig_e
         REAL(wp) :: N_cycles, log_N, thickness_corr
 
@@ -903,11 +1065,13 @@ CONTAINS
         ! MAIN TIME-STEP LOOP (Hourly Data)
         ! --------------------------------------------------------------
         DO t_step = 1, site%nsteps
+            p_env = get_env_probability(site, config, t_step)
+            env_hours = 8760.0_wp * p_env
             
             ! Initialize local wind speeds and ambient TI
             DO m = 1, n_turb
                 n_idx = node_idx(m)
-                ws_new(m) = site%ws0_ts(n_idx, h_idx(m), t_step)
+                ws_new(m) = get_ambient_ws(site, config, n_idx, h_idx(m), t_step)
                 ti_new(m) = I_ambient 
             END DO
             
@@ -928,7 +1092,7 @@ CONTAINS
                     m_ct = get_coeff(v_local, turbines(t_type)%v_ref, &
                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
                     
-                    CALL analytical_wake_sparse(m, n_idx, turbines(t_type), m_ct, site, turbines, &
+                    CALL analytical_wake_sparse(m, n_idx, turbines(t_type), m_ct, site, turbines, config, &
                                                 n_turb, node_idx, type_turb, t_step, &
                                                 single_deficit_u, single_added_i)
                     
@@ -941,7 +1105,8 @@ CONTAINS
                 DO m = 1, n_turb
                     IF (SQRT(wake_deficit_u(m)) < 1.0_wp) THEN
                         n_idx = node_idx(m)          
-                        ws_new(m) = site%ws0_ts(n_idx, h_idx(m), t_step) * (1.0_wp - SQRT(wake_deficit_u(m)))
+                        ws_new(m) = get_ambient_ws(site, config, n_idx, h_idx(m), t_step) * &
+                                                    (1.0_wp - SQRT(wake_deficit_u(m)))
                         ti_new(m) = SQRT(I_ambient**2 + wake_added_i(m))
                     ELSE
                         ws_new(m) = 0.0_wp
@@ -1008,16 +1173,15 @@ CONTAINS
                     END IF
                     
                     ! Accumulate Fractional Damage via Miner's Rule
-                    cum_damage(m) = cum_damage(m) + (cycles_per_hr / N_cycles)
+                    cum_damage(m) = cum_damage(m) + ((cycles_per_hr * env_hours) / N_cycles)
                 END IF
             END DO
             
-            total_aep = total_aep + tep_farm
+            total_aep = total_aep + (tep_farm * p_env)
         END DO
 
         ! Post-process AEP
-        total_aep = total_aep / REAL(site%nsteps, wp) 
-        total_aep = total_aep * 8760.0_wp / 1.0E9_wp  
+        total_aep = total_aep * 8760.0_wp / 1.0E9_wp ! Convert to GWh
         ind%raw_aep = total_aep
 
         ind%raw_fatigue = MAXVAL(cum_damage) ! Maximum damage across turbines as farm-level fatigue metric
@@ -1034,11 +1198,12 @@ CONTAINS
     ! ==================================================================
     ! SUBROUTINE: analytical_wake_sparse (Calculates dU and dI)
     ! ==================================================================
-    SUBROUTINE analytical_wake_sparse(m, n_idx, t_spec, m_ct1, site, turbines, &
-                                      n_turb, node_idx, type_turb, t_step, deficit_u, added_i)
+    SUBROUTINE analytical_wake_sparse(m, n_idx, t_spec, m_ct1, site, turbines, config, &
+                                  n_turb, node_idx, type_turb, t_step, deficit_u, added_i)
         TYPE(SiteData),    INTENT(IN)  :: site
         TYPE(TurbineSpec), INTENT(IN)  :: turbines(:)
         TYPE(TurbineSpec), INTENT(IN)  :: t_spec
+        TYPE(ConfigData),  INTENT(IN)  :: config
         INTEGER,           INTENT(IN)  :: m, n_idx, n_turb, t_step
         INTEGER,           INTENT(IN)  :: node_idx(:), type_turb(:)
         REAL(wp),          INTENT(IN)  :: m_ct1
@@ -1057,7 +1222,7 @@ CONTAINS
         
         hubX   = site%x_coord(n_idx)
         hubY   = site%y_coord(n_idx)
-        theta  = site%wd0_ts(n_idx, t_step)
+        theta  = get_ambient_wd(site, config, n_idx, t_step)
         d_wake = t_spec%rotor_diameter
         h_wake = t_spec%hub_height
         m_ct   = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
@@ -1128,7 +1293,13 @@ CONTAINS
 
         ! Handle Edge Case: Completely empty layout
         IF (n_turb == 0) THEN
-            ws_out = site%ws0_ts  ! Wind is completely undisturbed
+            DO t_step = 1, site%nsteps
+                DO i = 1, site%n_nodes
+                    DO j = 1, site%n_hlevel
+                        ws_out(i,j,t_step) = get_ambient_ws(site, config, i, j, t_step)
+                    END DO
+                END DO
+            END DO
             RETURN
         END IF
 
@@ -1156,7 +1327,11 @@ CONTAINS
         DO t_step = 1, site%nsteps
             
             ! Initialize the dense wind field for this time step
-            ws_new = site%ws0_ts(:,:,t_step)
+            DO i = 1, site%n_nodes
+                DO j = 1, site%n_hlevel
+                    ws_new(i,j) = get_ambient_ws(site, config, i, j, t_step)
+                END DO
+            END DO
             
             ! ----------------------------------------------------------
             ! ALL-TO-ALL ITERATIVE SOLVER
@@ -1177,7 +1352,7 @@ CONTAINS
                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
                     
                     ! Calculate dense deficit field
-                    CALL bastankhah_wake_dense(n_idx, turbines(t_type), m_ct, site, t_step, single_deficit)
+                    CALL bastankhah_wake_dense(n_idx, turbines(t_type), m_ct, site, config, t_step, single_deficit)
                     
                     wake_deficit = wake_deficit + (single_deficit**2)
                 END DO
@@ -1186,7 +1361,8 @@ CONTAINS
                 DO i = 1, site%n_nodes
                     DO j = 1, site%n_hlevel
                         IF (SQRT(wake_deficit(i, j)) < 1.0_wp) THEN
-                            ws_new(i, j) = site%ws0_ts(i, j, t_step) * (1.0_wp - SQRT(wake_deficit(i, j)))
+                            ws_new(i, j) = get_ambient_ws(site, config, i, j, t_step) * &
+                                                            (1.0_wp - SQRT(wake_deficit(i, j)))
                         ELSE
                             ws_new(i, j) = 0.0_wp
                         END IF
@@ -1210,8 +1386,9 @@ CONTAINS
     ! SUBROUTINE: bastankhah_wake_dense
     ! Calculates the wake deficit across ALL nodes and ALL height levels
     ! ==================================================================
-    SUBROUTINE bastankhah_wake_dense(n_idx, t_spec, m_ct1, site, t_step, deficit)
+    SUBROUTINE bastankhah_wake_dense(n_idx, t_spec, m_ct1, site, config, t_step, deficit)
         TYPE(SiteData),    INTENT(IN)  :: site
+        TYPE(ConfigData),  INTENT(IN)  :: config
         TYPE(TurbineSpec), INTENT(IN)  :: t_spec
         INTEGER,           INTENT(IN)  :: n_idx, t_step
         REAL(wp),          INTENT(IN)  :: m_ct1
@@ -1232,7 +1409,7 @@ CONTAINS
         ! 2. Get properties of the wake-producing turbine
         hubX   = site%x_coord(n_idx)
         hubY   = site%y_coord(n_idx)
-        theta  = site%wd0_ts(n_idx, t_step)
+        theta  = get_ambient_wd(site, config, n_idx, t_step)
         d_wake = t_spec%rotor_diameter
         h_wake = t_spec%hub_height
         m_ct = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
@@ -1293,421 +1470,49 @@ CONTAINS
         END DO
     END FUNCTION get_coeff
 
+    FUNCTION get_ambient_ws(site, config, n_idx, h_idx, env_idx) RESULT(ws)
+    TYPE(SiteData),   INTENT(IN) :: site
+    TYPE(ConfigData), INTENT(IN) :: config
+    INTEGER,          INTENT(IN) :: n_idx, h_idx, env_idx
+    REAL(wp) :: ws
+
+    IF (config%wind_mode == WIND_MODE_TIMESERIES) THEN
+        ws = site%ws0_ts(n_idx, h_idx, env_idx)
+    ELSE
+        ws = site%rose_ws_hub(h_idx, env_idx)
+    END IF
+    END FUNCTION get_ambient_ws
+
+
+    FUNCTION get_ambient_wd(site, config, n_idx, env_idx) RESULT(wd)
+        TYPE(SiteData),   INTENT(IN) :: site
+        TYPE(ConfigData), INTENT(IN) :: config
+        INTEGER,          INTENT(IN) :: n_idx, env_idx
+        REAL(wp) :: wd
+
+        IF (config%wind_mode == WIND_MODE_TIMESERIES) THEN
+            wd = site%wd0_ts(n_idx, env_idx)
+        ELSE
+            wd = site%rose_wd_rad(env_idx)
+        END IF
+    END FUNCTION get_ambient_wd
+
+
+    FUNCTION get_env_probability(site, config, env_idx) RESULT(p_env)
+        TYPE(SiteData),   INTENT(IN) :: site
+        TYPE(ConfigData), INTENT(IN) :: config
+        INTEGER,          INTENT(IN) :: env_idx
+        REAL(wp) :: p_env
+
+        IF (config%wind_mode == WIND_MODE_TIMESERIES) THEN
+            p_env = 1.0_wp / REAL(site%nsteps, wp)
+        ELSE
+            p_env = site%rose_prob(env_idx)
+        END IF
+    END FUNCTION get_env_probability
+
 END MODULE physics
 
-! MODULE power
-
-!     USE precision, ONLY: wp
-!     USE types,     ONLY: SiteData, TurbineSpec, Individual, ConfigData
-    
-!     IMPLICIT NONE
-!     PRIVATE
-
-!     ! Expose ONLY the top-level evaluation routine
-!     PUBLIC :: evaluate_aep
-!     public :: calculate_3d_wind_field
-
-! CONTAINS
-
-!     ! ==================================================================
-!     ! SUBROUTINE: evaluate_aep (Optimized Sparse Matrix Approach)
-!     ! ==================================================================
-!     SUBROUTINE evaluate_aep(ind, site, turbines, config)
-!         TYPE(Individual),  INTENT(INOUT) :: ind
-!         TYPE(SiteData),    INTENT(IN)    :: site
-!         TYPE(TurbineSpec), INTENT(IN)    :: turbines(:)
-!         TYPE(ConfigData),  INTENT(IN)    :: config
-
-!         INTEGER :: n_turb, i, m, t_step, t_type, n_idx, k_iter
-!         REAL(wp) :: total_aep, tep_farm, v_local, cp_val, area, m_ct
-!         REAL(wp), PARAMETER :: rho = 1.225_wp, pi = 3.141592653589793_wp
-
-!         ! --- SPARSE ARRAYS ---
-!         INTEGER, ALLOCATABLE  :: node_idx(:), type_turb(:), h_idx(:)
-!         REAL(wp), ALLOCATABLE :: ws_new(:), ws_old(:)
-!         REAL(wp), ALLOCATABLE :: wake_deficit(:), single_deficit(:)
-        
-!         ! 1. Extract Active Turbines to Sparse Arrays (The Performance Fix)
-!         n_turb = COUNT(ind%chromosome > 1)
-!         ! IF (n_turb == 0) THEN
-!         !     ind%obj_vals(2) = 0.0_wp  
-!         !     RETURN
-!         ! END IF
-
-!         ALLOCATE(node_idx(n_turb), type_turb(n_turb), h_idx(n_turb))
-!         ALLOCATE(ws_new(n_turb), ws_old(n_turb))
-!         ALLOCATE(wake_deficit(n_turb), single_deficit(n_turb))
-
-!         ! Build the lookup tables
-!         m = 1
-!         DO i = 1, site%n_nodes
-!             t_type = ind%chromosome(i)
-!             IF (t_type > 1) THEN
-!                 node_idx(m) = i
-!                 type_turb(m) = ind%chromosome(i)
-!                 h_idx(m)     = turbines(t_type)%h_idx
-!                 m = m + 1
-!             END IF
-!         END DO
-
-!         total_aep = 0.0_wp
-
-!         ! --------------------------------------------------------------
-!         ! MAIN TIME-STEP LOOP
-!         ! --------------------------------------------------------------
-!         DO t_step = 1, site%nsteps
-            
-!             ! Initialize local wind speeds for the active turbines ONLY
-!             DO m = 1, n_turb
-!                 n_idx = node_idx(m)
-!                 ws_new(m) = site%ws0_ts(n_idx, h_idx(m), t_step)
-!             END DO
-            
-!             ! ----------------------------------------------------------
-!             ! ALL-TO-ALL ITERATIVE SOLVER (Sparse Logic)
-!             ! ----------------------------------------------------------
-!             DO k_iter = 1, config%max_iter 
-!                 ws_old = ws_new 
-!                 wake_deficit = 0.0_wp
-                
-!                 ! Loop 1: Calculate wakes produced by active turbines
-!                 DO m = 1, n_turb
-!                     t_type = type_turb(m)
-!                     n_idx  = node_idx(m)
-!                     v_local = ws_new(m)
-                    
-!                     m_ct = get_coeff(v_local, turbines(t_type)%v_ref, &
-!                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
-                    
-!                     ! ONLY calculate deficit AT the other turbine locations!
-!                     CALL bastankhah_wake_sparse(m, n_idx, turbines(t_type), m_ct, site, turbines, &
-!                                                 n_turb, node_idx, type_turb, t_step, single_deficit)
-                    
-!                     wake_deficit = wake_deficit + (single_deficit**2)
-!                 END DO
-
-!                 ! Loop 2: Apply the total aggregated wake
-!                 DO m = 1, n_turb
-!                     IF (SQRT(wake_deficit(m)) < 1.0_wp) THEN
-!                         n_idx = node_idx(m)          
-!                         ! Multiply original free-stream by the wake fraction
-!                         ws_new(m) = site%ws0_ts(n_idx, h_idx(m), t_step) * (1.0_wp - SQRT(wake_deficit(m)))
-!                     ELSE
-!                         ws_new(m) = 0.0_wp
-!                     END IF
-!                 END DO
-
-!                 ! Convergence Check (comparing just the n_turb values)
-!                 IF (MAXVAL(ABS(ws_new - ws_old)) < 1.0E-4_wp) EXIT 
-!             END DO 
-            
-!             ! ----------------------------------------------------------
-!             ! Calculate power using the FINAL converged local speeds
-!             ! ----------------------------------------------------------
-!             tep_farm = 0.0_wp
-!             DO m = 1, n_turb
-!                 t_type = type_turb(m)
-!                 v_local = ws_new(m)
-                
-!                 cp_val = get_coeff(v_local, turbines(t_type)%v_ref, &
-!                                    turbines(t_type)%cp_ref, turbines(t_type)%n_points)
-                
-!                 area = pi * (turbines(t_type)%rotor_diameter / 2.0_wp)**2
-!                 tep_farm = tep_farm + (0.5_wp * rho * area * (v_local**3) * cp_val)
-!             END DO
-            
-!             total_aep = total_aep + tep_farm
-!         END DO
-
-!         total_aep = total_aep / REAL(site%nsteps, wp) ! Average Power (Watts)
-!         total_aep = total_aep * 8760.0_wp / 1.0E9_wp  ! Annual Energy Production (GWh / Year)
-!         ! ind%obj_vals(1) = ind%obj_vals(1) / (total_aep * config%farmlifetime)
-!         ! ind%obj_vals(2) = -total_aep * config%farmlifetime
-!         ! ! --- NEW: Store purely as Raw AEP (Lifetime GWh) ---
-!         ! ind%raw_aep = total_aep * config%farmlifetime
-!         ind%raw_aep = total_aep
-
-!         DEALLOCATE(node_idx, type_turb, ws_new, ws_old, wake_deficit, single_deficit)
-
-!     END SUBROUTINE evaluate_aep
-
-!     ! ==================================================================
-!     ! SUBROUTINE: bastankhah_wake_sparse
-!     ! (Strict mathematical port of original F77 logic)
-!     ! ==================================================================
-!     SUBROUTINE bastankhah_wake_sparse(m, n_idx, t_spec, m_ct1, site, turbines, &
-!                                       n_turb, node_idx, type_turb, t_step, deficit)
-!         TYPE(SiteData),    INTENT(IN)  :: site
-!         TYPE(TurbineSpec), INTENT(IN)  :: turbines(:)
-!         TYPE(TurbineSpec), INTENT(IN)  :: t_spec
-!         INTEGER,           INTENT(IN)  :: m, n_idx, n_turb, t_step
-!         INTEGER,           INTENT(IN)  :: node_idx(:), type_turb(:)
-!         REAL(wp),          INTENT(IN)  :: m_ct1
-!         REAL(wp),          INTENT(OUT) :: deficit(:) ! Now a 1D array of size n_turb
-        
-!         REAL(wp), PARAMETER :: k_star = 0.0324_wp 
-        
-!         REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake
-!         REAL(wp) :: dx, dy, x_rot, y_rot, x_rel
-!         REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord
-!         INTEGER  :: i, j_node, j_type
-!         real(wp) :: m_ct
-        
-!         ! 1. Initialize output deficit array to zero
-!         deficit = 0.0_wp
-        
-!         ! 2. Get properties of the wake-producing turbine (m)
-!         hubX   = site%x_coord(n_idx)
-!         hubY   = site%y_coord(n_idx)
-!         theta  = site%wd0_ts(n_idx, t_step)
-!         d_wake = t_spec%rotor_diameter
-!         h_wake = t_spec%hub_height
-!         m_ct = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
-!         ! 3. Calculate beta
-!         ! (Using MAX to prevent NaN if m_ct somehow hits 1.0)
-!         beta = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
-                                   
-
-!         ! 4. Loop through ONLY the downstream active turbines
-!         DO i = 1, n_turb
-!             ! A turbine cannot wake itself
-!             IF (i == m) CYCLE
-            
-!             j_node = node_idx(i)
-            
-!             ! 5. Calculate rotated coordinates (Exact match to old script)
-!             dx = site%x_coord(j_node) - hubX
-!             dy = site%y_coord(j_node) - hubY
-!             x_rot =  dx * COS(theta) + dy * SIN(theta)
-!             y_rot = -dx * SIN(theta) + dy * COS(theta)
-            
-!             radial_dist = ABS(y_rot)
-!             x_rel = MAX(x_rot, 0.0_wp)
-            
-!             ! 6. Logic Gates: Downstream AND within 3 diameters
-!             IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
-                
-!                 ! Calculate normalized wake diameter
-!                 sigma_d0 = (k_star * x_rel / d_wake) + (0.2_wp * SQRT(beta))
-                
-!                 ! Pre-calculate Gaussian terms
-!                 a1 = m_ct / (8.0_wp * (sigma_d0 ** 2))
-                
-!                 ! --- ANTI-NaN NEAR-WAKE CAP (Restored exactly) ---
-!                 IF (a1 >= 1.0_wp) a1 = 0.999_wp
-                
-!                 b1 = -1.0_wp / (2.0_wp * (sigma_d0 ** 2))
-!                 c2 = (radial_dist / d_wake) ** 2
-                
-!                 ! 7. Calculate height difference specifically for the target turbine
-!                 j_type  = type_turb(i)
-!                 z_coord = turbines(j_type)%hub_height
-!                 c1 = ((z_coord - h_wake) / d_wake) ** 2
-                
-!                 ! 8. Apply exact deficit formula
-!                 deficit(i) = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
-                
-!             END IF
-!         END DO
-!     END SUBROUTINE bastankhah_wake_sparse
-
-    ! ! ==================================================================
-    ! ! SUBROUTINE: bastankhah_wake_dense
-    ! ! Calculates the wake deficit across ALL nodes and ALL height levels
-    ! ! ==================================================================
-    ! SUBROUTINE bastankhah_wake_dense(n_idx, t_spec, m_ct1, site, t_step, deficit)
-    !     TYPE(SiteData),    INTENT(IN)  :: site
-    !     TYPE(TurbineSpec), INTENT(IN)  :: t_spec
-    !     INTEGER,           INTENT(IN)  :: n_idx, t_step
-    !     REAL(wp),          INTENT(IN)  :: m_ct1
-    !     REAL(wp),          INTENT(OUT) :: deficit(:,:) ! 2D: (n_nodes, n_hlevels)
-        
-    !     REAL(wp), PARAMETER :: k_star = 0.0324_wp
-        
-    !     REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake
-    !     REAL(wp) :: dx, dy, x_rot, y_rot, x_rel
-    !     REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord
-    !     INTEGER  :: i, j
-
-    !     real(wp) :: m_ct
-        
-    !     ! 1. Initialize output deficit array to zero
-    !     deficit = 0.0_wp
-        
-    !     ! 2. Get properties of the wake-producing turbine
-    !     hubX   = site%x_coord(n_idx)
-    !     hubY   = site%y_coord(n_idx)
-    !     theta  = site%wd0_ts(n_idx, t_step)
-    !     d_wake = t_spec%rotor_diameter
-    !     h_wake = t_spec%hub_height
-    !     m_ct = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
-    !     ! 3. Calculate beta
-    !     beta = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
-
-    !     ! 4. Loop through EVERY node in the grid
-    !     DO i = 1, site%n_nodes
-            
-    !         ! 5. Calculate rotated coordinates
-    !         dx = site%x_coord(i) - hubX
-    !         dy = site%y_coord(i) - hubY
-    !         x_rot =  dx * COS(theta) + dy * SIN(theta)
-    !         y_rot = -dx * SIN(theta) + dy * COS(theta)
-            
-    !         radial_dist = ABS(y_rot)
-    !         x_rel = MAX(x_rot, 0.0_wp)
-            
-    !         ! 6. Logic Gates: Downstream AND within 3 diameters
-    !         IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
-                
-    !             sigma_d0 = (k_star * x_rel / d_wake) + (0.2_wp * SQRT(beta))
-    !             a1 = m_ct / (8.0_wp * (sigma_d0 ** 2))
-                
-    !             IF (a1 >= 1.0_wp) a1 = 0.999_wp
-                
-    !             b1 = -1.0_wp / (2.0_wp * (sigma_d0 ** 2))
-    !             c2 = (radial_dist / d_wake) ** 2
-                
-    !             ! 7. Calculate deficit for EVERY height level at this node
-    !             DO j = 1, site%n_hlevel
-    !                 z_coord = site%h_level(j)
-    !                 c1 = ((z_coord - h_wake) / d_wake) ** 2
-                    
-    !                 deficit(i, j) = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
-    !             END DO
-    !         END IF
-    !     END DO
-    ! END SUBROUTINE bastankhah_wake_dense
-
-!     ! ==================================================================
-!     ! SUBROUTINE: calculate_3d_wind_field
-!     ! Solves the full 3D wind field for visualization/post-processing
-!     ! ==================================================================
-!     SUBROUTINE calculate_3d_wind_field(ind, site, turbines, config, ws_out)
-!         TYPE(Individual),  INTENT(IN)  :: ind
-!         TYPE(SiteData),    INTENT(IN)  :: site
-!         TYPE(TurbineSpec), INTENT(IN)  :: turbines(:)
-!         TYPE(ConfigData),  INTENT(IN)  :: config
-!         REAL(wp), ALLOCATABLE, INTENT(OUT) :: ws_out(:,:,:) ! (nodes, h_levels, t_steps)
-
-!         INTEGER  :: n_turb, i, j, m, t_step, t_type, n_idx, k_iter
-!         REAL(wp) :: v_local, m_ct
-
-!         ! --- SPARSE ARRAYS (For the wake producers) ---
-!         INTEGER, ALLOCATABLE :: node_idx(:), type_turb(:), h_idx(:)
-        
-!         ! --- DENSE ARRAYS (For the grid convergence) ---
-!         REAL(wp), ALLOCATABLE :: ws_new(:,:), ws_old(:,:)
-!         REAL(wp), ALLOCATABLE :: wake_deficit(:,:), single_deficit(:,:)
-        
-!         ! 1. Extract Active Turbines to Sparse Arrays
-!         n_turb = COUNT(ind%chromosome > 1)
-        
-!         ! Allocate the master output array
-!         ALLOCATE(ws_out(site%n_nodes, site%n_hlevel, site%nsteps))
-
-!         ! Handle Edge Case: Completely empty layout
-!         IF (n_turb == 0) THEN
-!             ws_out = site%ws0_ts  ! Wind is completely undisturbed
-!             RETURN
-!         END IF
-
-!         ALLOCATE(node_idx(n_turb), type_turb(n_turb), h_idx(n_turb))
-!         ALLOCATE(ws_new(site%n_nodes, site%n_hlevel))
-!         ALLOCATE(ws_old(site%n_nodes, site%n_hlevel))
-!         ALLOCATE(wake_deficit(site%n_nodes, site%n_hlevel))
-!         ALLOCATE(single_deficit(site%n_nodes, site%n_hlevel))
-
-!         ! Build the lookup tables for the wake producers
-!         m = 1
-!         DO i = 1, site%n_nodes
-!             t_type = ind%chromosome(i)
-!             IF (t_type > 1) THEN
-!                 node_idx(m)  = i
-!                 type_turb(m) = t_type
-!                 h_idx(m)     = turbines(t_type)%h_idx 
-!                 m = m + 1
-!             END IF
-!         END DO
-
-!         ! --------------------------------------------------------------
-!         ! MAIN TIME-STEP LOOP
-!         ! --------------------------------------------------------------
-!         DO t_step = 1, site%nsteps
-            
-!             ! Initialize the dense wind field for this time step
-!             ws_new = site%ws0_ts(:,:,t_step)
-            
-!             ! ----------------------------------------------------------
-!             ! ALL-TO-ALL ITERATIVE SOLVER
-!             ! ----------------------------------------------------------
-!             DO k_iter = 1, config%max_iter 
-!                 ws_old = ws_new 
-!                 wake_deficit = 0.0_wp
-                
-!                 ! Loop 1: Calculate wakes produced by active turbines
-!                 DO m = 1, n_turb
-!                     t_type = type_turb(m)
-!                     n_idx  = node_idx(m)
-                    
-!                     ! Local wind speed specifically at the turbine's hub
-!                     v_local = ws_new(n_idx, h_idx(m))
-                    
-!                     m_ct = get_coeff(v_local, turbines(t_type)%v_ref, &
-!                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
-                    
-!                     ! Calculate dense deficit field
-!                     CALL bastankhah_wake_dense(n_idx, turbines(t_type), m_ct, site, t_step, single_deficit)
-                    
-!                     wake_deficit = wake_deficit + (single_deficit**2)
-!                 END DO
-
-!                 ! Loop 2: Apply the total aggregated wake to the ENTIRE grid
-!                 DO i = 1, site%n_nodes
-!                     DO j = 1, site%n_hlevel
-!                         IF (SQRT(wake_deficit(i, j)) < 1.0_wp) THEN
-!                             ws_new(i, j) = site%ws0_ts(i, j, t_step) * (1.0_wp - SQRT(wake_deficit(i, j)))
-!                         ELSE
-!                             ws_new(i, j) = 0.0_wp
-!                         END IF
-!                     END DO
-!                 END DO
-
-!                 ! Convergence Check (comparing the dense grid)
-!                 IF (MAXVAL(ABS(ws_new - ws_old)) < 1.0E-4_wp) EXIT 
-!             END DO 
-            
-!             ! Store the converged 3D slice for this time step
-!             ws_out(:,:,t_step) = ws_new
-!         END DO
-
-!         DEALLOCATE(node_idx, type_turb, h_idx)
-!         DEALLOCATE(ws_new, ws_old, wake_deficit, single_deficit)
-
-!     END SUBROUTINE calculate_3d_wind_field
-
-!     ! ==================================================================
-!     ! HELPER FUNCTIONS
-!     ! ==================================================================
-    ! FUNCTION get_coeff(v_in, v_ref, c_ref, n_pts) RESULT(coeff)
-    !     REAL(wp), INTENT(IN) :: v_in
-    !     REAL(wp), INTENT(IN) :: v_ref(:), c_ref(:)
-    !     INTEGER,  INTENT(IN) :: n_pts
-    !     REAL(wp) :: coeff, frac
-    !     INTEGER :: i
-
-    !     coeff = 0.0_wp
-    !     IF (v_in < v_ref(1) .OR. v_in > v_ref(n_pts)) RETURN
-
-    !     DO i = 1, n_pts - 1
-    !         IF (v_in >= v_ref(i) .AND. v_in <= v_ref(i+1)) THEN
-    !             frac = (v_in - v_ref(i)) / (v_ref(i+1) - v_ref(i))
-    !             coeff = c_ref(i) + frac * (c_ref(i+1) - c_ref(i))
-    !             RETURN
-    !         END IF
-    !     END DO
-    ! END FUNCTION get_coeff
-
-! END MODULE power
 
 MODULE NSGA_II
 
@@ -2654,7 +2459,7 @@ END MODULE SOGA
 module outputs
     USE precision, ONLY: wp
     USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Population
-    USE physics,   ONLY: calculate_3d_wind_field
+    USE physics,   ONLY: calculate_3d_wind_field, get_ambient_wd
     
     implicit none
     PRIVATE
@@ -2840,7 +2645,7 @@ contains
                         t_step, ',', site%x_coord(i), ',', site%y_coord(i)
                         
                     ! Get the meteorological wind direction at this specific node and time
-                    theta = site%wd0_ts(i, t_step)
+                    theta = get_ambient_wd(site, config, i, t_step)
                     
                     ! Write U, V, and Mag for every height level on this same row
                     DO j = 1, site%n_hlevel

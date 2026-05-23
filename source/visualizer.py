@@ -1,11 +1,13 @@
 import os
+import json
 import pandas as pd
 import numpy as np
 import matplotlib
-matplotlib.use('Agg') 
+# matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.tri import Triangulation
+from scipy.stats import weibull_min
 import pyvista as pv
 import ffmpeg
 
@@ -739,3 +741,180 @@ def generate_soga_mp4_animation(file_path='./outputs/animation_data_soga.csv', l
     except Exception as e:
         print(f"🔴 Failed to save MP4: {e}")
         return None
+
+def plot_wind_rose(json_path="./inputs/wind_analytics.json"):
+    """
+    Generates a polar stacked histogram (Wind Rose) from binned ERA5 data.
+    """
+    if not os.path.exists(json_path):
+        print(f"🔴 ERROR: Analytics data file not found at {json_path}. Process wind data first.")
+        return False
+
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    dir_centers = np.radians(data["dir_centers"])  
+    probabilities = np.array(data["joint_probabilities"])  
+    vel_step = data["speed_centers"][1] - data["speed_centers"][0] if len(data["speed_centers"]) > 1 else 1.0
+    
+    n_sectors = len(dir_centers)
+    n_speed_bins = probabilities.shape[1]
+    width = (2 * np.pi) / n_sectors  
+
+    # =====================================================================
+    # VISUAL DESIGN CONFIGURATION: WIND ROSE
+    # =====================================================================
+    # Modify these parameters to customize fonts, colors, and layout positioning
+    FIG_SIZE       = (9, 7)            # Window geometry dimensions (Width, Height in inches)
+    TITLE_TEXT     = "Wind Rose Directional Frequency Distribution"
+    TITLE_FONT     = {"family": "Arial", "size": 14, "weight": "bold", "color": "#1a1a1a"}
+    LABEL_FONT     = {"family": "Arial", "size": 10, "weight": "normal"}
+    
+    GRID_COLOR     = "#888888"         # Hex color code for concentric polar grid rings
+    GRID_STYLE     = ":"               # Line style options: ':', '-', '--', '-.'
+    GRID_ALPHA     = 0.4               # Radial ring line transparency (0.0=clear, 1.0=opaque)
+    
+    WEDGE_EDGE_CLR = "white"           # Border line color around individual bins
+    WEDGE_LINE_W   = 0.5               # Border line width thickness
+    WEDGE_ALPHA    = 0.9               # Wedge fill transparency transparency
+    
+    COLOR_MAP_NAME = 'viridis'         # Stacked speed colormap. e.g., 'viridis', 'plasma', 'inferno', 'jet'
+    LEGEND_TITLE   = "Velocity Tiers"   # Header text for color legend box
+    LEGEND_POS     = (1.15, 0.5)       # Location coordinates (X, Y) relative to polar axes center
+    # =====================================================================
+
+    COLOR_MAP = plt.colormaps[COLOR_MAP_NAME]
+    fig, ax = plt.subplots(figsize=FIG_SIZE, subplot_kw={'projection': 'polar'})
+    
+    # Set meteorological baseline orientation (0 degrees North, clockwise progression)
+    ax.set_theta_zero_location('N')
+    ax.set_theta_direction(-1)
+
+    bottoms = np.zeros(n_sectors)
+    
+    for idx in range(n_speed_bins):
+        v_low = idx * vel_step
+        v_high = (idx + 1) * vel_step
+        bin_label = f"{v_low:.1f} - {v_high:.1f} m/s"
+        
+        color_fraction = idx / max(1, n_speed_bins - 1)
+        ax.bar(
+            dir_centers, 
+            probabilities[:, idx], 
+            width=width, 
+            bottom=bottoms, 
+            color=COLOR_MAP(color_fraction),
+            edgecolor=WEDGE_EDGE_CLR, 
+            linewidth=WEDGE_LINE_W, 
+            alpha=WEDGE_ALPHA, 
+            label=bin_label
+        )
+        bottoms += probabilities[:, idx]
+
+    ax.set_title(TITLE_TEXT, pad=20, **TITLE_FONT)
+    ax.grid(True, linestyle=GRID_STYLE, color=GRID_COLOR, alpha=GRID_ALPHA)
+    
+    # Tick mark labels font synchronization
+    for tick in ax.get_xticklabels():
+        if "family" in LABEL_FONT:
+            tick.set_fontfamily(LABEL_FONT["family"])
+        if "size" in LABEL_FONT:
+            tick.set_fontsize(LABEL_FONT["size"])
+        if "weight" in LABEL_FONT:
+            tick.set_fontweight(LABEL_FONT["weight"])
+
+    ax.legend(
+        loc='center left', 
+        bbox_to_anchor=LEGEND_POS, 
+        title=LEGEND_TITLE, 
+        title_fontsize=11,
+        fontsize=9
+    )
+    
+    plt.tight_layout()
+    plt.show(block=False)  
+    return True
+
+
+def plot_wind_speed_diagnostics(json_path="./inputs/wind_analytics.json"):
+    """
+    Renders an integrated speed diagnostics plot overlaying a histogram and Weibull fit.
+    """
+    if not os.path.exists(json_path):
+        print(f"🔴 ERROR: Analytics data file not found at {json_path}. Process wind data first.")
+        return False
+
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    k_shape = data["weibull_k"]
+    c_scale = data["weibull_c"]
+    hist_density = data["hist_density"]
+    hist_edges = np.array(data["hist_edges"])
+
+    # =====================================================================
+    # VISUAL DESIGN CONFIGURATION: SPEED DIAGNOSTICS
+    # =====================================================================
+    # Modify these parameters to customize fonts, colors, and layout positioning
+    FIG_SIZE       = (10, 6)           # Window geometry dimensions (Width, Height in inches)
+    FONT_FAMILY    = "Arial"           # Global fallback typography engine
+    
+    # Empirical Histogram Bar Configurations
+    HIST_COLOR     = "#3a806c"         # Bar color code (Teal theme synchronization)
+    HIST_ALPHA     = 0.6               # Transparency fill value for bars
+    HIST_EDGE_CLR  = "white"           # Border separation color code for bars
+    HIST_LABEL     = 'Empirical Frequency Density (ERA5)'
+    
+    # Parametric Weibull Trace Configurations
+    WEIBULL_COLOR  = "#b22222"         # Line color code (Crimson for continuous analytical path)
+    WEIBULL_WIDTH  = 2.5               # Trace thickness path thickness
+    WEIBULL_STYLE  = "-"               # Path notation: '-', '--', ':', '-.'
+    
+    # Axis Backdrop Configurations
+    GRID_COLOR     = "#cccccc"         # Background alignment grid line color
+    GRID_STYLE     = "--"              # Grid line notation style
+    GRID_ALPHA     = 0.5               # Grid transparency trace visibility
+    LEGEND_LOC     = "upper right"     # Positioning anchor for legend block bounds
+    # =====================================================================
+
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+
+    # 1. Map Empirical Histogram Frequencies (FIXED: align='edge' handles bin bounding)
+    widths = np.diff(hist_edges)
+    ax.bar(
+        hist_edges[:-1], 
+        hist_density, 
+        width=widths, 
+        align='edge', 
+        color=HIST_COLOR, 
+        alpha=HIST_ALPHA, 
+        edgecolor=HIST_EDGE_CLR, 
+        label=HIST_LABEL
+    )
+
+    # 2. Map Parametric Smooth Continuous PDF
+    x_space = np.linspace(0, hist_edges[-1], 300)
+    y_weibull = weibull_min.pdf(x_space, k_shape, scale=c_scale)
+    
+    label_text = f'Weibull PDF Model Fit\n($k$={k_shape:.2f}, $c$={c_scale:.2f} m/s)'
+    ax.plot(
+        x_space, 
+        y_weibull, 
+        color=WEIBULL_COLOR, 
+        linewidth=WEIBULL_WIDTH, 
+        linestyle=WEIBULL_STYLE,
+        label=label_text
+    )
+
+    # Decorate axes layout parameters
+    ax.set_title("Wind Speed Probability Density Profile vs. Analytical Fit", 
+                 fontsize=14, fontweight='bold', family=FONT_FAMILY, pad=15)
+    ax.set_xlabel("Wind Speed Magnitude ($U$) [m/s]", fontsize=11, family=FONT_FAMILY)
+    ax.set_ylabel("Probability Density Distribution [$f(U)$]", fontsize=11, family=FONT_FAMILY)
+    
+    ax.grid(True, linestyle=GRID_STYLE, color=GRID_COLOR, alpha=GRID_ALPHA)
+    ax.legend(fontsize=10, loc=LEGEND_LOC)
+
+    plt.tight_layout()
+    plt.show(block=False)
+    return True
