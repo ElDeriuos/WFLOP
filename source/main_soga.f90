@@ -19,7 +19,7 @@ PROGRAM run_soga
     ! 1. Read Configurations
     CALL read_gui_config('./inputs/config.inp', config)
     CALL load_turbines(config%f_turb, turbines, site)
-    CALL load_site_data(config%f_wind, config%f_bathy, config%f_dist, site, config)
+    CALL load_site_data(config%f_wind1, config%f_wind2, config%f_bathy, config%f_dist, site, config)
 
     ! 2. Initialize and Evaluate First Generation
     CALL init_random_seed()                     

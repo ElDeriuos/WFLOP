@@ -12,9 +12,13 @@ import shutil
 import re
 import subprocess
 
-# Set the global appearance and color theme
-ctk.set_appearance_mode("Light")  # Options: "System" (standard), "Dark", "Light"
-ctk.set_default_color_theme("dark-blue")  # Options: "blue" (standard), "green", "dark-blue"
+# =====================================================================
+# DESIGN: GLOBAL THEME CONFIGURATION
+# =====================================================================
+# appearance_mode options: "System" (follows OS), "Dark", "Light"
+ctk.set_appearance_mode("Light")  
+# color_theme options: "blue" (standard), "green", "dark-blue"
+ctk.set_default_color_theme("dark-blue")  
 
 OBJ_MAPPING = {
     "Minimize LCOE": 1,
@@ -27,16 +31,12 @@ class OWFLOGui(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        # Track the active Fortran subprocess so we can kill it if needed
         self.running_process = None
 
         # --- Main Window Configuration ---
         self.title("OWFLO: Offshore Wind Farm Layout Optimizer")
-        self.geometry("1400x800")
+        self.geometry("1400x850")
         
-        # Configure a 1x2 Grid (1 Row, 2 Columns)
-        # Column 0 (Left) = Controls (Weight 1)
-        # Column 1 (Right) = Console/Visuals (Weight 2, takes up more space)
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=2)
         self.grid_rowconfigure(0, weight=1)
@@ -47,42 +47,34 @@ class OWFLOGui(ctk.CTk):
         self.tabview = ctk.CTkTabview(self, corner_radius=10)
         self.tabview.grid(row=0, column=0, padx=10, pady=(10, 10), sticky="nsew")
 
-        # Create the Tabs in chronological workflow order
         self.tab_pre = self.tabview.add("Pre-Processing")
         self.tab_farm = self.tabview.add("Farm Setup")
         self.tab_soga = self.tabview.add("SOGA (Single-Obj)")
-        self.tab_moga = self.tabview.add("MOGA (NSGA-II)")
+        self.tab_moga = self.tabview.add("NSGA-II (Multi-Obj)")
 
         # ---------------------------------------------------------
-        # 1. DEFINE ALL VARIABLES HERE FIRST!
+        # SHARED VARIABLES
         # ---------------------------------------------------------
         self.opt_mode_var = ctk.StringVar(value="SOGA")
         self.obj1_var = ctk.StringVar(value="Minimize LCOE")
         self.obj2_var = ctk.StringVar(value="Minimize Fatigue")
-
-        # --- File Path Variables (With Defaults) ---
+        
         self.path_turb = ctk.StringVar(value="./inputs/turbine_spec.txt")
-        self.path_wind = ctk.StringVar(value="./inputs/filtered_wind.txt")
+        self.path_mesh = ctk.StringVar(value="./inputs/windfarm_rocol.txt")
+        self.path_wind1 = ctk.StringVar(value="./inputs/filtered_wind.txt")
+        self.path_wind2 = ctk.StringVar(value="./inputs/wind_rose_matrix.dat")
         self.path_bathy = ctk.StringVar(value="./inputs/farm_bathymetry.dat")
         self.path_dist = ctk.StringVar(value="./inputs/site_distances.txt")
         self.path_out = ctk.StringVar(value="./outputs/")
+        self.wind_calc_mode = ctk.StringVar(value="Time-Series")
 
-        # Build the Tabs
-        self.build_pre_processing_tab()
-        self.build_farm_setup_tab()
-        self.build_soga_tab()
-        self.build_moga_tab()
-
-        # Run the validation once at startup so the MOGA dropdowns don't overlap
-        self.enforce_unique_objectives(1)
-        self._apply_objective_rules(1)
 
         # =========================================================
         # RIGHT PANEL: THE OUTPUT CENTER
         # =========================================================
         self.output_frame = ctk.CTkFrame(self, corner_radius=10)
         self.output_frame.grid(row=0, column=1, padx=(0, 10), pady=10, sticky="nsew")
-        self.output_frame.grid_rowconfigure(1, weight=1) # Let the console expand
+        self.output_frame.grid_rowconfigure(1, weight=1)
         self.output_frame.grid_columnconfigure(0, weight=1)
 
         # 1. Output Header
@@ -102,6 +94,19 @@ class OWFLOGui(ctk.CTk):
         # Keep the Global Abort Button here
         self.btn_abort = ctk.CTkButton(self.console_action_frame, text="⏹ Abort Execution", fg_color="#b22222", hover_color="#8b1a1a", state="disabled", command=self.abort_process)
         self.btn_abort.pack(side="right")
+
+        # =========================================================
+        # INITIALIZATION EXECUTION
+        # =========================================================
+        # Build the Tabs
+        self.build_pre_processing_tab()
+        self.build_farm_setup_tab()
+        self.build_soga_tab()
+        self.build_moga_tab()
+
+        # Run the validation once at startup so the MOGA dropdowns don't overlap
+        self.enforce_unique_objectives(1)
+        self._apply_objective_rules(1)
 
     # ---------------------------------------------------------
     # TAB BUILDERS
@@ -364,10 +369,12 @@ class OWFLOGui(ctk.CTk):
                           command=lambda: self.select_path(string_var, f"Select {label_text}", is_dir, filetypes)).grid(row=row, column=2, padx=5, pady=5)
 
         add_path_row(0, "Turbine Master:", self.path_turb, "Browse", filetypes=[("Text/CSV", "*.txt *.csv *.dat")])
-        add_path_row(1, "Wind Time-Series:", self.path_wind, "Browse", filetypes=[("Text", "*.txt")])
-        add_path_row(2, "Bathymetry Data:", self.path_bathy, "Browse", filetypes=[("Data", "*.dat")])
-        add_path_row(3, "Site Distances:", self.path_dist, "Browse", filetypes=[("Text", "*.txt")])
-        add_path_row(4, "Output Directory:", self.path_out, "Folder", is_dir=True)
+        add_path_row(1, "Mesh Coordinates:", self.path_mesh, "Browse", filetypes=[("Text", "*.txt")])
+        add_path_row(2, "Wind Time-Series:", self.path_wind1, "Browse", filetypes=[("Text", "*.txt")])
+        add_path_row(3, "Wind Rose Data:", self.path_wind2, "Browse", filetypes=[("Text", "*.dat")])
+        add_path_row(4, "Bathymetry Data:", self.path_bathy, "Browse", filetypes=[("Data", "*.dat")])
+        add_path_row(5, "Site Distances:", self.path_dist, "Browse", filetypes=[("Text", "*.txt")])
+        add_path_row(6, "Output Directory:", self.path_out, "Folder", is_dir=True)
         # 2. Farm Constraints (Shared)
         const_frame = ctk.CTkFrame(self.tab_farm, corner_radius=10)
         const_frame.pack(fill="x", padx=10, pady=0)
@@ -403,9 +410,8 @@ class OWFLOGui(ctk.CTk):
         self.console.configure(state="disabled")
 
     def build_pre_processing_tab(self):
-        """Constructs the Mesh, Bathymetry, and Wind Data preparation tools."""
+        """Constructs the Mesh, Bathymetry, and Upgraded Wind Data preparation tools."""
         
-        # We use a ScrollableFrame in case we add Wind and Distances here later
         self.scroll_pre = ctk.CTkScrollableFrame(self.tab_pre, fg_color="transparent")
         self.scroll_pre.pack(fill="both", expand=True)
 
@@ -415,7 +421,8 @@ class OWFLOGui(ctk.CTk):
         mesh_frame = ctk.CTkFrame(self.scroll_pre, corner_radius=10)
         mesh_frame.pack(fill="x", padx=10, pady=(10, 20))
 
-        ctk.CTkLabel(mesh_frame, text="1. Spatial Mesh Generation", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
+        ctk.CTkLabel(mesh_frame, text="1. Spatial Mesh Generation", 
+                        font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         # Grid Resolution Inputs (dx, dy)
         res_frame = ctk.CTkFrame(mesh_frame, fg_color="transparent")
@@ -433,13 +440,15 @@ class OWFLOGui(ctk.CTk):
 
         # KML File Selection
         self.kml_files_list = []
-        self.lbl_kml_status = ctk.CTkLabel(mesh_frame, text="No KML boundaries selected.", text_color="gray")
+        self.lbl_kml_status = ctk.CTkLabel(mesh_frame, text="No KML boundaries selected.",
+                                            text_color="gray")
         self.lbl_kml_status.pack(anchor="w", padx=15, pady=(5, 0))
-
+        
         btn_row_1 = ctk.CTkFrame(mesh_frame, fg_color="transparent")
         btn_row_1.pack(fill="x", padx=15, pady=(5, 15))
         
-        ctk.CTkButton(btn_row_1, text="Select KML Files", width=120, fg_color="#4a4a4a", hover_color="#333333", command=self.select_kmls).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(btn_row_1, text="Select KML Files", width=120, fg_color="#4a4a4a", hover_color="#333333", 
+                      command=self.select_kmls).pack(side="left", padx=(0, 10))
         self.btn_run_mesh = ctk.CTkButton(btn_row_1, text="Generate Mesh (Polygon3)", command=self.run_mesh_pipeline)
         self.btn_run_mesh.pack(side="left")
 
@@ -449,7 +458,8 @@ class OWFLOGui(ctk.CTk):
         bathy_frame = ctk.CTkFrame(self.scroll_pre, corner_radius=10)
         bathy_frame.pack(fill="x", padx=10, pady=(0, 20))
 
-        ctk.CTkLabel(bathy_frame, text="2. Bathymetry Extraction", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
+        ctk.CTkLabel(bathy_frame, text="2. Bathymetry Extraction", 
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         self.gebco_file = None
         self.lbl_bathy_status = ctk.CTkLabel(bathy_frame, text="No GEBCO .asc file selected.", text_color="gray")
@@ -458,25 +468,45 @@ class OWFLOGui(ctk.CTk):
         btn_row_2 = ctk.CTkFrame(bathy_frame, fg_color="transparent")
         btn_row_2.pack(fill="x", padx=15, pady=(5, 15))
 
-        ctk.CTkButton(btn_row_2, text="Select GEBCO (.asc)", width=120, fg_color="#4a4a4a", hover_color="#333333", command=self.select_gebco).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(btn_row_2, text="Select GEBCO (.asc)", width=120, fg_color="#4a4a4a", 
+                      hover_color="#333333", command=self.select_gebco).pack(side="left", padx=(0, 10))
         self.btn_run_bathy = ctk.CTkButton(btn_row_2, text="Extract Depths", command=self.run_bathy_pipeline)
         self.btn_run_bathy.pack(side="left")
 
         # ==========================================
-        # 3. WIND DATA FRAME
+        # 3. WIND DATA & RESOURCE ANALYTICS FRAME
         # ==========================================
         wind_frame = ctk.CTkFrame(self.scroll_pre, corner_radius=10)
         wind_frame.pack(fill="x", padx=10, pady=(0, 20))
 
-        ctk.CTkLabel(wind_frame, text="3. Wind Data Preparation", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
+        ctk.CTkLabel(wind_frame, text="3. Wind Resource Assessment", 
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         self.era5_dir = None
         self.lbl_wind_status = ctk.CTkLabel(wind_frame, text="No ERA5 directory selected.", text_color="gray")
         self.lbl_wind_status.pack(anchor="w", padx=15, pady=(0, 5))
 
-        # --- NEW: Helpful UI Tip ---
-        tip_text = "💡 Tip: Hours are 0 to 23 (0 = Midnight). Wrap-around is supported (e.g., Start 22, End 4)."
-        ctk.CTkLabel(wind_frame, text=tip_text, text_color="gray", font=ctk.CTkFont(size=11, slant="italic")).pack(anchor="w", padx=15, pady=(0, 5))
+        # --- A. MODE SELECTION ---
+        # DESIGN: We use a segmented button for a modern, clean toggle aesthetic.
+        # Colors: selected_color sets the active state background, unselected_color is the idle background.
+        mode_frame = ctk.CTkFrame(wind_frame, fg_color="transparent")
+        mode_frame.pack(fill="x", padx=15, pady=(5, 10))
+        
+        ctk.CTkLabel(mode_frame, text="Calculation Mode:").pack(side="left", padx=(0, 10))
+        self.seg_wind_mode = ctk.CTkSegmentedButton(
+            mode_frame, 
+            values=["Time-Series", "Wind Rose Binning"],
+            variable=self.wind_calc_mode,
+            command=self.toggle_wind_mode,
+            selected_color="#2c824c", # Distinctive green for active
+            selected_hover_color="#1d5c34"
+        )
+        self.seg_wind_mode.pack(side="left")
+
+        # --- B. TIME WINDOW FILTERS (Shared) ---
+        tip_text = "💡 Tip: Hours are 0 to 23. Wrap-around is supported (e.g., Start 22, End 4)."
+        ctk.CTkLabel(wind_frame, text=tip_text, text_color="gray", 
+                     font=ctk.CTkFont(size=11, slant="italic")).pack(anchor="w", padx=15, pady=(0, 5))
 
         # --- Time Window Filters Grid ---
         filter_frame = ctk.CTkFrame(wind_frame, fg_color="transparent")
@@ -514,21 +544,70 @@ class OWFLOGui(ctk.CTk):
         self.ent_y_end = ctk.CTkEntry(filter_frame, width=60, placeholder_text="All")
         self.ent_y_end.grid(row=4, column=2, padx=5, pady=2)
 
-        # Action Buttons
-        btn_row_3 = ctk.CTkFrame(wind_frame, fg_color="transparent")
-        btn_row_3.pack(fill="x", padx=15, pady=(10, 15))
+        # --- C. WIND ROSE BINNING CONFIGURATION ---
+        # DESIGN: Frame for binning inputs. Padded slightly on top to separate from time windows.
+        self.bin_frame = ctk.CTkFrame(wind_frame, fg_color="transparent")
+        self.bin_frame.pack(fill="x", padx=15, pady=(10, 5))
 
+        # DESIGN: Fonts for labels can be customized using font=ctk.CTkFont(...)
+        ctk.CTkLabel(self.bin_frame, text="Directional Sectors (N):").pack(side="left", padx=(0, 5))
+        self.ent_dir_bins = ctk.CTkEntry(self.bin_frame, width=60)
+        self.ent_dir_bins.insert(0, "12") # Default to 30-degree sectors
+        self.ent_dir_bins.pack(side="left", padx=(0, 20))
+
+        ctk.CTkLabel(self.bin_frame, text="Velocity Step (m/s):").pack(side="left", padx=(0, 5))
+        self.ent_vel_step = ctk.CTkEntry(self.bin_frame, width=60)
+        self.ent_vel_step.insert(0, "1.0") # Default to 1 m/s intervals
+        self.ent_vel_step.pack(side="left")
+
+        # Set initial UI state based on default toggle (Time-Series)
+        self.toggle_wind_mode(self.wind_calc_mode.get())
+
+        # --- D. ACTION & VISUALIZATION BUTTONS ---
+        btn_row_3 = ctk.CTkFrame(wind_frame, fg_color="transparent")
+        btn_row_3.pack(fill="x", padx=15, pady=(10, 5))
+
+        # DESIGN: Main processing buttons. Primary action gets standard theme color, secondary gets gray (#4a4a4a).
         ctk.CTkButton(btn_row_3, text="Select ERA5 Directory", width=150, fg_color="#4a4a4a", hover_color="#333333", command=self.select_era5).pack(side="left", padx=(0, 10))
-        self.btn_run_wind = ctk.CTkButton(btn_row_3, text="Interpolate to Mesh", command=self.run_wind_pipeline)
+        self.btn_run_wind = ctk.CTkButton(btn_row_3, text="Process Wind Data", command=self.run_wind_pipeline)
         self.btn_run_wind.pack(side="left")
 
+        # DESIGN: Analytics buttons. Grouped in a separate frame below the main execution row.
+        # Container frame grouping the visual resource assessment triggers
+        viz_btn_row = ctk.CTkFrame(wind_frame, fg_color="transparent")
+        viz_btn_row.pack(fill="x", padx=15, pady=(5, 15))
+
+        # Button 1: Directional Polar Distribution (Wind Rose)
+        # CONFIGURATION HINT: Adjust 'fg_color' (hex string) and text padding here
+        self.btn_plot_rose = ctk.CTkButton(
+            viz_btn_row, 
+            text=" Plot Wind Rose", 
+            fg_color="#3a5a80",        # Base widget fill tone
+            hover_color="#2b4360",     # Dynamic cursor interaction color
+            command=self.plot_wind_rose
+        )
+        # expand=True ensures both elements scale identically across horizontal space
+        self.btn_plot_rose.pack(side="left", expand=True, fill="x", padx=(0, 5))
+        
+        # Button 2: Integrated Velocity Analytics (Histogram + Weibull Fit Overlay)
+        # CONFIGURATION HINT: Modify text parameters to customize font style or context scaling
+        self.btn_plot_speed = ctk.CTkButton(
+            viz_btn_row, 
+            text=" Plot Weilbull Fit", 
+            fg_color="#3a806c",        # Base widget fill tone matching the analytics theme
+            hover_color="#2b6051",     # Dynamic cursor interaction color
+            command=self.plot_wind_speed_diagnostics
+        )
+        self.btn_plot_speed.pack(side="left", expand=True, fill="x", padx=(5, 0))
+        
         # ==========================================
         # 4. DISTANCE CALCULATOR FRAME
         # ==========================================
         dist_frame = ctk.CTkFrame(self.scroll_pre, corner_radius=10)
         dist_frame.pack(fill="x", padx=10, pady=(0, 20))
 
-        ctk.CTkLabel(dist_frame, text="4. Logistics & Site Distances", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
+        ctk.CTkLabel(dist_frame, text="4. Logistics & Site Distances", 
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         self.shoreline_kml = None
         self.grid_kml = None
@@ -539,26 +618,46 @@ class OWFLOGui(ctk.CTk):
         dist_grid.pack(fill="x", padx=15, pady=5)
 
         # Row 1: Shoreline
-        ctk.CTkButton(dist_grid, text="Shoreline KML", width=120, fg_color="#4a4a4a", hover_color="#333333", command=self.select_shoreline).grid(row=0, column=0, pady=2, sticky="w")
+        ctk.CTkButton(dist_grid, text="Shoreline KML", width=120, 
+                      fg_color="#4a4a4a", hover_color="#333333", 
+                      command=self.select_shoreline).grid(row=0, column=0, pady=2, sticky="w")
         self.lbl_shore_status = ctk.CTkLabel(dist_grid, text="Pending...", text_color="gray")
         self.lbl_shore_status.grid(row=0, column=1, padx=10, sticky="w")
 
         # Row 2: Grid Connection
-        ctk.CTkButton(dist_grid, text="Grid Conn. KML", width=120, fg_color="#4a4a4a", hover_color="#333333", command=self.select_grid).grid(row=1, column=0, pady=2, sticky="w")
+        ctk.CTkButton(dist_grid, text="Grid Conn. KML", width=120, 
+                      fg_color="#4a4a4a", hover_color="#333333", 
+                      command=self.select_grid).grid(row=1, column=0, pady=2, sticky="w")
         self.lbl_grid_status = ctk.CTkLabel(dist_grid, text="Pending...", text_color="gray")
         self.lbl_grid_status.grid(row=1, column=1, padx=10, sticky="w")
 
         # Row 3: Port
-        ctk.CTkButton(dist_grid, text="Port KML", width=120, fg_color="#4a4a4a", hover_color="#333333", command=self.select_port).grid(row=2, column=0, pady=2, sticky="w")
+        ctk.CTkButton(dist_grid, text="Port KML", width=120, 
+                      fg_color="#4a4a4a", hover_color="#333333", 
+                      command=self.select_port).grid(row=2, column=0, pady=2, sticky="w")
         self.lbl_port_status = ctk.CTkLabel(dist_grid, text="Pending...", text_color="gray")
         self.lbl_port_status.grid(row=2, column=1, padx=10, sticky="w")
 
-        self.btn_run_dist = ctk.CTkButton(dist_frame, text="Calculate Distances", command=self.run_distances_pipeline)
+        self.btn_run_dist = ctk.CTkButton(dist_frame, text="Calculate Distances", 
+                                          command=self.run_distances_pipeline)
         self.btn_run_dist.pack(anchor="w", padx=15, pady=(10, 15))
 
     # ---------------------------------------------------------
     # CALLBACKS & WORKER THREADS
     # ---------------------------------------------------------
+    def toggle_wind_mode(self, current_mode):
+        """Grays out or enables the binning input fields based on the selected mode."""
+        if current_mode == "Time-Series":
+            self.ent_dir_bins.configure(state="disabled", fg_color="#e0e0e0", text_color="gray")
+            self.ent_vel_step.configure(state="disabled", fg_color="#e0e0e0", text_color="gray")
+            self.log("Wind Mode switched to Time-Series. Chronological evaluation active.")
+        else:
+            self.ent_dir_bins.configure(state="normal", fg_color=["#F9F9FA", "#343638"], 
+                                        text_color=["#000000", "#FFFFFF"])
+            self.ent_vel_step.configure(state="normal", fg_color=["#F9F9FA", "#343638"], 
+                                        text_color=["#000000", "#FFFFFF"])
+            self.log("Wind Mode switched to Wind Rose Binning. Empirical probability evaluation active.")
+            
     def abort_process(self):
         """Force-kills the currently running Fortran subprocess."""
         if self.running_process is not None and self.running_process.poll() is None:
@@ -1224,6 +1323,7 @@ class OWFLOGui(ctk.CTk):
         
         # If SOGA, obj2 doesn't matter, we write 0. If MOGA, get the real value.
         obj2_int = 0 if opt_mode_int == 1 else OBJ_MAPPING[self.obj2_var.get()]
+        wind_mode_int = 1 if self.wind_calc_mode.get() == "Time-Series" else 2
 
         with open('./inputs/config.inp', 'w') as f:
             f.write(f"{it_max}\n")
@@ -1237,13 +1337,74 @@ class OWFLOGui(ctk.CTk):
             f.write(f"{opt_mode_int}\n")
             f.write(f"{obj1_int}\n")
             f.write(f"{obj2_int}\n")
-            # Write File Paths (Double quoted for safe Fortran list-directed reads)
+            f.write(f"{wind_mode_int}\n")
+
+            # File Paths
             f.write(f'"{self.path_turb.get().replace(chr(92), "/")}"\n')
-            f.write(f'"{self.path_wind.get().replace(chr(92), "/")}"\n')
+            f.write(f'"{self.path_mesh.get().replace(chr(92), "/")}"\n')
+            f.write(f'"{self.path_wind1.get().replace(chr(92), "/")}"\n')
+            f.write(f'"{self.path_wind2.get().replace(chr(92), "/")}"\n')
             f.write(f'"{self.path_bathy.get().replace(chr(92), "/")}"\n')
             f.write(f'"{self.path_dist.get().replace(chr(92), "/")}"\n')
             f.write(f'"{self.path_out.get().replace(chr(92), "/")}"\n')
 
+    # =====================================================================
+    # WIND RESOURCE VISUALIZATION CALLBACK CONNECTIONS
+    # =====================================================================
+    def plot_wind_rose(self):
+        """Triggers the directional polar frequency mesh engine."""
+        self.log("🧭 Extracting joint probability matrix distributions...")
+        # Invokes interactive backend context parsing from visualizer_15.py
+        success = visualizer.plot_wind_rose(json_path="./inputs/wind_analytics.json")
+        if success:
+            self.log("🎉 Directional polar wind rose rendering loop initialized successfully.")
+        else:
+            self.log("🔴 ERROR: Unable to load or parse path destination structural matrices.")
+
+    def plot_wind_speed_diagnostics(self):
+        """Triggers the unified speed diagnostics profile canvas (Histogram + Weibull)."""
+        self.log("📊 Compiling empirical frequency bars and analytical parametric curve fields...")
+        # Invokes the unified graphics plot context mapping both data parameters
+        success = visualizer.plot_wind_speed_diagnostics(json_path="./inputs/wind_analytics.json")
+        if success:
+            self.log("🎉 Consolidated wind speed diagnostics window spawned successfully.")
+        else:
+            self.log("🔴 ERROR: Failed to decode target distribution profile parameters.")
+    # =====================================================================
+        
+    def run_wind_pipeline(self):
+        if not self.era5_dir:
+            self.log("ERROR: Please select a directory containing ERA5 .nc files first.")
+            return
+        self.btn_run_wind.configure(state="disabled")
+
+        filters = {
+            'h_start': self.ent_h_start.get().strip(),
+            'h_end': self.ent_h_end.get().strip(),
+            'd_start': self.ent_d_start.get().strip(),
+            'd_end': self.ent_d_end.get().strip(),
+            'm_start': self.ent_m_start.get().strip(),
+            'm_end': self.ent_m_end.get().strip(),
+            'y_start': self.ent_y_start.get().strip(),
+            'y_end': self.ent_y_end.get().strip(),
+            'mode': self.wind_calc_mode.get(),
+            'dir_bins': self.ent_dir_bins.get() if self.wind_calc_mode.get() == "Wind Rose Binning" else None,
+            'vel_step': self.ent_vel_step.get() if self.wind_calc_mode.get() == "Wind Rose Binning" else None
+        }
+        def worker():
+            self.log(f"--- Starting Wind Data Generation ({filters['mode']}) ---")
+            
+            # Pass BOTH the directory and the extended filters to your backend
+            wind_generator.process_wind_data(
+                self.era5_dir, 
+                filters, 
+                output_callback=self.log
+            )
+            
+            self.log("--- Wind Pipeline Complete ---")
+            self.after(0, lambda: self.btn_run_wind.configure(state="normal"))
+
+        threading.Thread(target=worker, daemon=True).start()
 if __name__ == "__main__":
     app = OWFLOGui()
     app.mainloop()

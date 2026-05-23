@@ -4,6 +4,7 @@ import numpy as np
 import xarray as xr
 from datetime import datetime
 from pyproj import Transformer
+from scipy.stats import weibull_min
 
 def read_rocol_mesh(filepath):
     """Reads the relative coordinates from the mesh file."""
@@ -48,6 +49,16 @@ def apply_cyclic_filter(ds, time_component, start_val, end_val):
     else:
         # Wrap-around logic (e.g., >= 18 OR <= 4)
         return ds.where((attr >= s) | (attr <= e), drop=True)
+
+
+def safe_interp(ds, method='cubic', **indexers):
+    """Perform xarray interpolation with fallback when cubic is unsupported."""
+    if method == 'cubic':
+        needs_fallback = any(ds.sizes.get(dim, 0) < 4 for dim in indexers)
+        if needs_fallback:
+            return ds.interp(method='linear', **indexers)
+    return ds.interp(method=method, **indexers)
+
 
 def process_wind_data(nc_dir, filters, output_callback=print):
     """Main pipeline: Aggregates, filters, interpolates, and writes Fortran wind data."""
@@ -131,6 +142,89 @@ def process_wind_data(nc_dir, filters, output_callback=print):
         return False
         
     output_callback(f"   Filtered from {original_steps} to {n_steps} target time steps.")
+
+    if filters.get('mode') == "Wind Rose Binning":
+        output_callback("Executing Probabilistic Wind Rose Binning Core...")
+        
+        # 1. Compute Geometric Center Coordinates
+        center_lon = float(np.mean(lons))
+        center_lat = float(np.mean(lats))
+        output_callback(f"   Wind Farm Geographic Center: Lon={center_lon:.4f}, Lat={center_lat:.4f}")
+        
+        # 2. Execute High-Order Bicubic Interpolation for Target Coordinate Point
+        output_callback("   Performing 2D Bicubic Spline space-time interpolation...")
+        ds_center = safe_interp(ds, latitude=center_lat, longitude=center_lon, method='cubic').load()
+        
+        u10 = ds_center['u10'].values
+        v10 = ds_center['v10'].values
+        
+        # 3. Derive Vector Magnitudes and Meteorological Angles
+        ws = np.sqrt(u10**2 + v10**2)
+        wd_deg = np.degrees(np.arctan2(u10, v10)) % 360.0
+        
+        # 4. Resolve True North Wrap-Around Boundary Conditions
+        n_sectors = int(filters.get('dir_bins', 12))
+        delta_dir = 360.0 / n_sectors
+        shifted_wd = (wd_deg + (delta_dir / 2.0)) % 360.0
+        
+        # Define contiguous structural bins for direction and velocity
+        vel_step = float(filters.get('vel_step', 1.0))
+        max_ws = np.max(ws)
+        speed_bins = np.arange(0, max_ws + vel_step * 2, vel_step)
+        dir_bins = np.arange(0, 360.0 + delta_dir, delta_dir)
+        
+        # 5. Generate Empirical Joint Probability Mass Grid
+        counts, _, _ = np.histogram2d(shifted_wd, ws, bins=[dir_bins, speed_bins])
+        prob_matrix = counts / len(ws)
+        
+        # 6. Fit continuous parametric profile via Maximum Likelihood Estimation
+        output_callback("   Fitting continuous 2-parameter Weibull distribution profiles...")
+        shape_k, _, scale_c = weibull_min.fit(ws, floc=0)
+        output_callback(f"   MLE Results -> Shape (k): {shape_k:.4f}, Scale (c): {scale_c:.4f} m/s")
+        
+        # 7. Serialize Structural Analytics Output for visualizer.py
+        # High-resolution frequency tally optimized to match Weibull curve overlays cleanly
+        hist_counts, hist_edges = np.histogram(ws, bins='auto', density=True)
+        
+        analytics_payload = {
+            "weibull_k": float(shape_k),
+            "weibull_c": float(scale_c),
+            "sector_width": float(delta_dir),
+            "dir_centers": [float(i * delta_dir) for i in range(n_sectors)],
+            "speed_centers": [float(v) for v in (speed_bins[:-1] + vel_step / 2.0)],
+            "joint_probabilities": prob_matrix.tolist(),
+            "hist_density": hist_counts.tolist(),
+            "hist_edges": hist_edges.tolist()
+        }
+        
+        analytics_path = os.path.join(os.path.dirname(output_file), 'wind_analytics.json')
+        with open(analytics_path, 'w', encoding='utf-8') as jf:
+            json.dump(analytics_payload, jf, indent=4)
+            
+        # 8. Export Discrete State Matrix Document tailored for Modern Fortran Core
+        # File contains: Total active bins on line 1, followed by: midpoint_wd, midpoint_ws, probability
+        active_bins = []
+        for i in range(n_sectors):
+            wd_mid = float(i * delta_dir)
+            for j in range(len(speed_bins) - 1):
+                ws_mid = float(speed_bins[j] + vel_step / 2.0)
+                p_val = float(prob_matrix[i, j])
+                if p_val > 1e-6: # Memory compression: drop zero-probability environmental states
+                    active_bins.append((wd_mid, ws_mid, p_val))
+                    
+        rose_output_path = os.path.join(os.path.dirname(output_file), 'wind_rose_matrix.dat')
+        with open(rose_output_path, 'w', newline='\n') as rf:
+            rf.write(f"{len(active_bins):12d}\n")
+            for item in active_bins:
+                rf.write(f"{item[0]:10.2f}{item[1]:10.2f}{item[2]:12.6f}\n")
+                
+        output_callback(f"SUCCESS: Statistical profiles generated. Matrix saved to '{os.path.basename(rose_output_path)}'.")
+        
+        # Explicit resource termination to clear RAM buffers under Linux/WSL runtime environments
+        ds.close()
+        for d in datasets:
+            d.close()
+        return True
 
     # 5. Interpolate and Write Directly to Fortran Format
     output_callback(f"4. Interpolating and writing {output_file} (Chunk Size: {chunk_size})...")
