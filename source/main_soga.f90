@@ -13,6 +13,8 @@ PROGRAM run_soga
     TYPE(TurbineSpec), ALLOCATABLE :: turbines(:)
     TYPE(Population)    :: parent_pop, offspring_pop, combined_pop
     INTEGER :: generation
+    REAL(wp) :: best_fitness
+    INTEGER :: stall_count
 
     PRINT *, "Starting Single-Objective Optimizer (SOGA)..."
     
@@ -27,6 +29,11 @@ PROGRAM run_soga
     CALL soga_evaluate_population(parent_pop, site, turbines, config)
     CALL soga_assign_fitness(parent_pop)
 
+    ! Early-stop bookkeeping: best fitness (lower is better for SOGA) and stall counter
+
+    best_fitness = parent_pop%inds(1)%fitness
+    stall_count = 0
+
     PRINT *, "Entering evolutionary loop..."
     
     ! 3. Main Evolutionary Loop
@@ -39,7 +46,21 @@ PROGRAM run_soga
         CALL merge_populations(parent_pop, offspring_pop, combined_pop)
         CALL soga_assign_fitness(combined_pop)
         CALL soga_select_survivors(combined_pop, parent_pop, config)
-        
+
+        ! Early-stop: check if the best solution improved this generation
+        IF (parent_pop%inds(1)%fitness < best_fitness) THEN
+            best_fitness = parent_pop%inds(1)%fitness
+            stall_count = 0
+        ELSE
+            stall_count = stall_count + 1
+        END IF
+
+        ! If stall tolerance is positive and we've exceeded it, break early
+        IF (config%soga_stall > 0 .AND. stall_count >= config%soga_stall) THEN
+            PRINT *, "🔶 Early stopping triggered: no improvement for ", stall_count, " generations."
+            EXIT
+        END IF
+
         ! Save Convergence History
         CALL soga_save_convergence(generation, parent_pop, TRIM(config%out_dir) // 'soga_convergence.csv')
     END DO

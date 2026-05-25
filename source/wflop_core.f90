@@ -30,6 +30,7 @@ MODULE types
         REAL(wp) :: mu           ! Mutation intensity
         INTEGER  :: max_turbs    ! Maximum allowable turbines
         INTEGER  :: min_turbs    ! Minimum allowable turbines
+        INTEGER  :: soga_stall   ! Generations before early stop (SOGA)
         INTEGER  :: n_obj        ! Number of objectives (1 or 2+)
         INTEGER  :: max_iter     ! Maximum iterations for All2AllIterative
         INTEGER  :: farmlifetime ! Estimated Farm's Life Time (Year)
@@ -120,7 +121,7 @@ MODULE types
         ! --- RAW METRICS  ---
         REAL(wp)              :: raw_cost      ! Pure financial Cost
         REAL(wp)              :: raw_aep       ! Pure Annual Energy Production
-        real(wp)              :: raw_fatigue   ! Maximum fatigue load (to be added later)
+        real(wp)              :: raw_fatigue   ! Normalized Fatigue Life [-], higher is better
         REAL(wp)              :: fitness       ! Scalar fitness score used ONLY by SOGA
         
         ! --- NSGA-II METRICS ---
@@ -181,6 +182,7 @@ CONTAINS
         READ(f_unit, *) config%mu
         READ(f_unit, *) config%max_turbs
         READ(f_unit, *) config%min_turbs
+        READ(f_unit, *) config%soga_stall
         READ(f_unit, *) config%workability
         
         READ(f_unit, *) config%opt_mode
@@ -368,7 +370,10 @@ CONTAINS
                     ! Calculate wind direction (Meteorological convention from North)
                     wd_rad = ATAN2(u_val, v_val)
                     IF (wd_rad < 0.0_wp) wd_rad = wd_rad + (2.0_wp * PI)
-                    
+
+                    ! Convert from North-origin clockwise to East-origin CCW for solver consistency
+                    wd_rad = (PI / 2.0_wp) - wd_rad
+                    IF (wd_rad < 0.0_wp) wd_rad = wd_rad + (2.0_wp * PI)
                     site%wd0_ts(i, t_step) = wd_rad
 
                     ! Power Law 
@@ -449,7 +454,12 @@ CONTAINS
                 STOP 1
             END IF
 
-            site%rose_wd_rad(i) = site%rose_wd_deg(i) * PI / 180.0_wp
+            ! Convert wind-rose direction from North-origin clockwise degrees into
+            ! solver-ready East-origin CCW radians.
+            site%rose_wd_rad(i) = (PI / 2.0_wp) - (site%rose_wd_deg(i) * PI / 180.0_wp)
+            IF (site%rose_wd_rad(i) < 0.0_wp) THEN
+                site%rose_wd_rad(i) = site%rose_wd_rad(i) + (2.0_wp * PI)
+            END IF
 
             DO j = 1, site%n_hlevel
                 site%rose_ws_hub(j, i) = site%rose_ws_10m(i) * &
@@ -1007,9 +1017,9 @@ MODULE physics
     REAL(wp), PARAMETER :: t_ref     = 0.032_wp      ! Reference thickness (m)
     REAL(wp), PARAMETER :: k_fatigue = 0.10_wp       ! Thickness exponent
 
-    ! Turbine Operational Data
-    REAL(wp), PARAMETER :: rpm_avg   = 12.0_wp       ! Average Rotor RPM
-    REAL(wp), PARAMETER :: cycles_per_hr = rpm_avg * 60.0_wp ! cycles per hour (720)
+    ! Numerical guards for Yang fatigue-life objective
+    REAL(wp), PARAMETER :: N_CYCLE_CAP = 1.0E30_wp   ! Upper cap for cycles-to-failure
+    REAL(wp), PARAMETER :: FATIGUE_EPS = 1.0E-12_wp  ! Division/logarithm guard
 
 CONTAINS
 
@@ -1024,16 +1034,17 @@ CONTAINS
 
         INTEGER :: n_turb, i, m, t_step, t_type, n_idx, k_iter
         REAL(wp) :: total_aep, tep_farm, v_local, i_local, cp_val, area, m_ct
-        REAL(wp) :: p_env, env_hours
-        REAL(wp) :: F_mean, F_peak, sig_mean, sig_max, sig_a, sig_m, sig_e
-        REAL(wp) :: N_cycles, log_N, thickness_corr
+        REAL(wp) :: p_env, v_ambient, N_local, N_ref
+        REAL(wp) :: avg_norm_life, min_norm_life
 
         ! --- SPARSE ARRAYS ---
         INTEGER, ALLOCATABLE  :: node_idx(:), type_turb(:), h_idx(:)
         REAL(wp), ALLOCATABLE :: ws_new(:), ws_old(:), ti_new(:)
         REAL(wp), ALLOCATABLE :: wake_deficit_u(:), single_deficit_u(:)
         REAL(wp), ALLOCATABLE :: wake_added_i(:), single_added_i(:)
-        REAL(wp), ALLOCATABLE :: cum_damage(:) ! Cumulative Fatigue Damage
+        REAL(wp), ALLOCATABLE :: fatigue_life(:)      ! Yang weighted fatigue life cycles, N_i,OPT
+        REAL(wp), ALLOCATABLE :: ref_fatigue_life(:)  ! Yang reference/no-wake cycles, N_i,ORI
+        REAL(wp), ALLOCATABLE :: norm_fatigue_life(:) ! N_i,OPT / N_i,ORI
         
         n_turb = COUNT(ind%chromosome > 1)
         IF (n_turb == 0) RETURN
@@ -1042,9 +1053,11 @@ CONTAINS
         ALLOCATE(ws_new(n_turb), ws_old(n_turb), ti_new(n_turb))
         ALLOCATE(wake_deficit_u(n_turb), single_deficit_u(n_turb))
         ALLOCATE(wake_added_i(n_turb), single_added_i(n_turb))
-        ALLOCATE(cum_damage(n_turb))
+        ALLOCATE(fatigue_life(n_turb), ref_fatigue_life(n_turb), norm_fatigue_life(n_turb))
         
-        cum_damage = 0.0_wp
+        fatigue_life      = 0.0_wp
+        ref_fatigue_life  = 0.0_wp
+        norm_fatigue_life = 0.0_wp
 
         ! Build lookup tables
         m = 1
@@ -1059,14 +1072,12 @@ CONTAINS
         END DO
 
         total_aep = 0.0_wp
-        thickness_corr = k_fatigue * LOG10(t_tower / t_ref)
 
         ! --------------------------------------------------------------
         ! MAIN TIME-STEP LOOP (Hourly Data)
         ! --------------------------------------------------------------
         DO t_step = 1, site%nsteps
             p_env = get_env_probability(site, config, t_step)
-            env_hours = 8760.0_wp * p_env
             
             ! Initialize local wind speeds and ambient TI
             DO m = 1, n_turb
@@ -1124,6 +1135,7 @@ CONTAINS
             tep_farm = 0.0_wp
             DO m = 1, n_turb
                 t_type = type_turb(m)
+                n_idx  = node_idx(m)
                 v_local = ws_new(m)
                 i_local = ti_new(m)
                 
@@ -1133,50 +1145,23 @@ CONTAINS
                 area = pi * (turbines(t_type)%rotor_diameter / 2.0_wp)**2
                 tep_farm = tep_farm + (0.5_wp * rho * area * (v_local**3) * cp_val)
                 
-                ! --- 2. FATIGUE ---
-                ! Only calculate operational fatigue if turbine is spinning
-                IF (v_local >= turbines(t_type)%v_ref(1) .AND. cp_val > 0.0_wp) THEN
-                    m_ct = get_coeff(v_local, turbines(t_type)%v_ref, &
-                                     turbines(t_type)%ct_ref, turbines(t_type)%n_points)
-                                     
-                    ! Thrust forces (Newtons)
-                    F_mean = 0.5_wp * rho * area * m_ct * (v_local**2)
-                    F_peak = 0.5_wp * rho * area * m_ct * ((v_local * (1.0_wp + g_v * i_local))**2)
-                    
-                    ! Stresses at tower root (Convert Pascals to MPa for DNV curve)
-                    sig_mean = (F_mean * turbines(t_type)%hub_height * r_pile) / I_z / 1.0E6_wp
-                    sig_max  = (F_peak * turbines(t_type)%hub_height * r_pile) / I_z / 1.0E6_wp
-                    sig_a    = sig_max - sig_mean
-                    
-                    ! Modified average stress (Goodman Correction - Eq 8)
-                    IF ((sig_mean + sig_a) < sigma_y) THEN
-                        sig_m = sig_mean
-                    ELSE IF ((sig_mean + sig_a) >= sigma_y .AND. sig_mean < sigma_y) THEN
-                        sig_m = sigma_y - sig_a
-                    ELSE
-                        sig_m = 0.0_wp
-                    END IF
-                    
-                    ! Equivalent stress amplitude (Eq 7)
-                    sig_e = sig_a / (1.0_wp - (sig_m / sigma_b))
-                    
-                    ! S-N Curve Cycles to Failure (Eq 9 & 10)
-                    ! Check low-cycle vs high-cycle regime
-                    ! Assume High-cycle first (m=5) to check N > 10^7
-                    log_N = 16.081_wp - 5.0_wp * LOG10(sig_e) - 5.0_wp * thickness_corr
-                    N_cycles = 10.0_wp**log_N
-                    
-                    IF (N_cycles <= 1.0E7_wp) THEN
-                        ! Recalculate with Low-cycle curve (m=3)
-                        log_N = 12.449_wp - 3.0_wp * LOG10(sig_e) - 3.0_wp * thickness_corr
-                        N_cycles = 10.0_wp**log_N
-                    END IF
-                    
-                    ! Accumulate Fractional Damage via Miner's Rule
-                    cum_damage(m) = cum_damage(m) + ((cycles_per_hr * env_hours) / N_cycles)
+                ! --- 2. YANG 2025 FATIGUE LIFE CYCLES ---
+                ! Local/wake-affected operational fatigue life, N_i,OPT.
+                ! No power output => operational fatigue life remains zero.
+                IF (v_local >= turbines(t_type)%cut_in .AND. &
+                    v_local <= turbines(t_type)%cut_off .AND. cp_val > 0.0_wp) THEN
+
+                    N_local = yang_fatigue_cycles(v_local, i_local, turbines(t_type))
+                    fatigue_life(m) = fatigue_life(m) + p_env * N_local
                 END IF
+
+                ! Reference/original fatigue life, N_i,ORI, under the same
+                ! environmental state but without wake speed deficit or wake-added TI.
+                v_ambient = get_ambient_ws(site, config, n_idx, h_idx(m), t_step)
+                N_ref = yang_fatigue_cycles(v_ambient, I_ambient, turbines(t_type))
+                ref_fatigue_life(m) = ref_fatigue_life(m) + p_env * N_ref
             END DO
-            
+
             total_aep = total_aep + (tep_farm * p_env)
         END DO
 
@@ -1184,14 +1169,34 @@ CONTAINS
         total_aep = total_aep * 8760.0_wp / 1.0E9_wp ! Convert to GWh
         ind%raw_aep = total_aep
 
-        ind%raw_fatigue = MAXVAL(cum_damage) ! Maximum damage across turbines as farm-level fatigue metric
+        ! Yang normalized fatigue life: N_i,OPT / N_i,ORI.
+        ! raw_fatigue is stored as a physical/reporting metric:
+        !     higher value = longer normalized fatigue life = better layout.
+        DO m = 1, n_turb
+            IF (ref_fatigue_life(m) > FATIGUE_EPS) THEN
+                norm_fatigue_life(m) = fatigue_life(m) / ref_fatigue_life(m)
+            ELSE
+                norm_fatigue_life(m) = 0.0_wp
+            END IF
+        END DO
 
-        ! Store Maximum Farm Damage as the secondary objective to minimize
-        ! ind%obj_vals(2) = MAXVAL(cum_damage)
+        avg_norm_life = SUM(norm_fatigue_life) / REAL(n_turb, wp)
+        min_norm_life = MINVAL(norm_fatigue_life)
 
-        DEALLOCATE(node_idx, type_turb, ws_new, ws_old, ti_new)
+        ! ==========================================================
+        ! SELECT THE REPORTED YANG FATIGUE METRIC
+        ! ==========================================================
+        ! Option A: Formal Yang Eq. (11)-(12), weakest-turbine metric.
+        ind%raw_fatigue = min_norm_life
+
+        ! Option B: Paper-figure style, average normalized fatigue life.
+        ! Use this instead if you want the Pareto y-axis to reproduce
+        ! "Normalized Average Fatigue Life" directly.
+        ! ind%raw_fatigue = avg_norm_life
+
+        DEALLOCATE(node_idx, type_turb, h_idx, ws_new, ws_old, ti_new)
         DEALLOCATE(wake_deficit_u, single_deficit_u, wake_added_i, single_added_i)
-        DEALLOCATE(cum_damage)
+        DEALLOCATE(fatigue_life, ref_fatigue_life, norm_fatigue_life)
 
     END SUBROUTINE evaluate_physics
 
@@ -1511,6 +1516,84 @@ CONTAINS
         END IF
     END FUNCTION get_env_probability
 
+    ! ==================================================================
+    ! FUNCTION: yang_fatigue_cycles
+    ! Purpose : Reproduce Yang et al. (2025) fatigue-life assessment.
+    ! Returns : Operational fatigue life cycles N for one turbine under
+    !           one environmental state. Returns 0 if turbine is not
+    !           operating, matching Yang Principle 3.
+    ! ==================================================================
+    FUNCTION yang_fatigue_cycles(v_hub, I_hub, t_spec) RESULT(N_cycles)
+        REAL(wp),          INTENT(IN) :: v_hub      ! Hub-height wind speed [m/s]
+        REAL(wp),          INTENT(IN) :: I_hub      ! Hub-height turbulence intensity [-]
+        TYPE(TurbineSpec), INTENT(IN) :: t_spec
+
+        REAL(wp) :: N_cycles
+        REAL(wp) :: area, ct_val
+        REAL(wp) :: F_mean, F_peak
+        REAL(wp) :: sig_mean, sig_max, sig_a, sig_m, sig_e
+        REAL(wp) :: denom, log_N, thickness_corr
+
+        N_cycles = 0.0_wp
+
+        ! Yang Principle 2/3: no power output => no operational fatigue life.
+        IF (v_hub < t_spec%cut_in .OR. v_hub > t_spec%cut_off) RETURN
+
+        ct_val = get_coeff(v_hub, t_spec%v_ref, t_spec%ct_ref, t_spec%n_points)
+        IF (ct_val <= 0.0_wp) RETURN
+
+        area = pi * (t_spec%rotor_diameter / 2.0_wp)**2
+
+        ! Eq. (5): mean and 3-s gust peak thrust force.
+        F_mean = 0.5_wp * rho * area * ct_val * (v_hub**2)
+        F_peak = 0.5_wp * rho * area * ct_val * ((v_hub * (1.0_wp + g_v * I_hub))**2)
+
+        ! Eq. (6): tower-root stress components, converted Pa -> MPa.
+        sig_mean = (F_mean * t_spec%hub_height * r_pile) / I_z / 1.0E6_wp
+        sig_max  = (F_peak * t_spec%hub_height * r_pile) / I_z / 1.0E6_wp
+        sig_a    = MAX(sig_max - sig_mean, 0.0_wp)
+
+        ! Eq. (8): modified average stress for Goodman correction.
+        IF ((sig_mean + sig_a) < sigma_y) THEN
+            sig_m = sig_mean
+        ELSE IF ((sig_mean + sig_a) >= sigma_y .AND. sig_mean < sigma_y) THEN
+            sig_m = sigma_y - sig_a
+        ELSE
+            sig_m = 0.0_wp
+        END IF
+
+        ! Eq. (7): equivalent stress amplitude.
+        denom = 1.0_wp - (sig_m / sigma_b)
+        IF (denom <= FATIGUE_EPS) RETURN
+
+        sig_e = sig_a / denom
+        IF (sig_e <= FATIGUE_EPS) THEN
+            N_cycles = N_CYCLE_CAP
+            RETURN
+        END IF
+
+        ! Eq. (9)-(10): DNV two-slope S-N curve.
+        thickness_corr = k_fatigue * LOG10(t_tower / t_ref)
+
+        ! First assume the high-cycle branch; if N <= 1E7, switch branch.
+        log_N = 16.081_wp - 5.0_wp * (LOG10(sig_e) + thickness_corr)
+        IF (log_N > LOG10(N_CYCLE_CAP)) THEN
+            N_cycles = N_CYCLE_CAP
+        ELSE
+            N_cycles = 10.0_wp**log_N
+        END IF
+
+        IF (N_cycles <= 1.0E7_wp) THEN
+            log_N = 12.449_wp - 3.0_wp * (LOG10(sig_e) + thickness_corr)
+            IF (log_N > LOG10(N_CYCLE_CAP)) THEN
+                N_cycles = N_CYCLE_CAP
+            ELSE
+                N_cycles = 10.0_wp**log_N
+            END IF
+        END IF
+
+    END FUNCTION yang_fatigue_cycles
+
 END MODULE physics
 
 
@@ -1660,7 +1743,7 @@ CONTAINS
                         (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
                     CASE(2); pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_cost
                     CASE(3); pop%inds(i)%obj_vals(1) = -pop%inds(i)%raw_aep
-                    CASE(4); pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_fatigue
+                    CASE(4); pop%inds(i)%obj_vals(1) = -pop%inds(i)%raw_fatigue
                 END SELECT
                 
                 ! 3. Explicitly map Objective 2
@@ -1669,7 +1752,7 @@ CONTAINS
                         (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
                     CASE(2); pop%inds(i)%obj_vals(2) = pop%inds(i)%raw_cost
                     CASE(3); pop%inds(i)%obj_vals(2) = -pop%inds(i)%raw_aep
-                    CASE(4); pop%inds(i)%obj_vals(2) = pop%inds(i)%raw_fatigue
+                    CASE(4); pop%inds(i)%obj_vals(2) = -pop%inds(i)%raw_fatigue
                 END SELECT
             END IF  
         END DO
@@ -2313,9 +2396,12 @@ CONTAINS
                     CASE(3) ! AEP
                         CALL evaluate_physics(pop%inds(i), site, turbines, config)
                         pop%inds(i)%fitness = -pop%inds(i)%raw_aep
-                    CASE(4) ! Fatigue
+                    CASE(4) ! Fatigue Life
                         CALL evaluate_physics(pop%inds(i), site, turbines, config)
-                        pop%inds(i)%fitness = pop%inds(i)%raw_fatigue
+
+                        ! raw_fatigue is Normalized Fatigue Life [-], higher is better.
+                        ! SOGA minimizes fitness, so use the negative value as done for AEP.
+                        pop%inds(i)%fitness = -pop%inds(i)%raw_fatigue
                 END SELECT
                 
             END IF  
@@ -2613,7 +2699,7 @@ contains
                 END IF
             END DO
             
-            PRINT *, " -> Obj ", obj_idx, " Best ID: ", best_id, " | Value: ", min_val
+            PRINT *, " -> Obj ", obj_idx, " Best ID: ", best_id, " | Value: ", abs(min_val)
             
             ! --- Call the Physics Engine ---
             ! This returns the massive dense grid of dimensions (n_nodes, n_hlevels, nsteps)
@@ -2732,14 +2818,14 @@ contains
 
         IF (gen_num == 1) THEN
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='REPLACE', IOSTAT=ios)
-            IF (ios /= 0) STOP "🔴 ERROR: Could not create SOGA convergence file."
+            IF (ios /= 0) STOP " ERROR: Could not create SOGA convergence file."
             WRITE(f_unit, '(A)') 'generation,best_fitness'
         ELSE
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', POSITION='APPEND', IOSTAT=ios)
         END IF
 
         ! Because soga_assign_fitness sorts the array, index 1 is ALWAYS the absolute best solution.
-        WRITE(f_unit, '(I0,A,F25.5)') gen_num, ',', pop%inds(1)%fitness
+        WRITE(f_unit, '(I0,A,F25.5)') gen_num, ',', abs(pop%inds(1)%fitness)
         CLOSE(f_unit)
     END SUBROUTINE soga_save_convergence
 
@@ -2800,7 +2886,7 @@ contains
             DO i = 1, site%n_nodes
                 WRITE(f_unit, '(I0,A,F12.2,A,F12.2)', ADVANCE='NO') &
                     t_step, ',', site%x_coord(i), ',', site%y_coord(i)
-                theta = site%wd0_ts(i, t_step)
+                theta = get_ambient_wd(site, config, i, t_step)
                 DO j = 1, site%n_hlevel
                     mag = ws_out(i, j, t_step)
                     u_val = mag * COS(theta)

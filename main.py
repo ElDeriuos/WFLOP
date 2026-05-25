@@ -24,7 +24,7 @@ OBJ_MAPPING = {
     "Minimize LCOE": 1,
     "Minimize CAPEX": 2,
     "Maximize AEP": 3,
-    "Minimize Fatigue": 4
+    "Maximize Fatigue Life": 4
 }
 
 class OWFLOGui(ctk.CTk):
@@ -57,7 +57,7 @@ class OWFLOGui(ctk.CTk):
         # ---------------------------------------------------------
         self.opt_mode_var = ctk.StringVar(value="SOGA")
         self.obj1_var = ctk.StringVar(value="Minimize LCOE")
-        self.obj2_var = ctk.StringVar(value="Minimize Fatigue")
+        self.obj2_var = ctk.StringVar(value="Maximize Fatigue Life")
         
         self.path_turb = ctk.StringVar(value="./inputs/turbine_spec.txt")
         self.path_mesh = ctk.StringVar(value="./inputs/windfarm_rocol.txt")
@@ -271,14 +271,14 @@ class OWFLOGui(ctk.CTk):
         ctk.CTkLabel(obj_frame, text="Objective 1:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
         self.dropdown_obj1 = ctk.CTkOptionMenu(
             obj_frame, values=list(OBJ_MAPPING.keys()), variable=self.obj1_var, 
-            command=lambda choice: self.enforce_unique_objectives(1)
+            command=lambda choice: self.enforce_unique_objectives(3)
         )
         self.dropdown_obj1.grid(row=0, column=1, padx=5, pady=5)
 
         ctk.CTkLabel(obj_frame, text="Objective 2:").grid(row=0, column=2, padx=5, pady=5, sticky="e")
         self.dropdown_obj2 = ctk.CTkOptionMenu(
             obj_frame, values=list(OBJ_MAPPING.keys()), variable=self.obj2_var, 
-            command=lambda choice: self.enforce_unique_objectives(2)
+            command=lambda choice: self.enforce_unique_objectives(4)
         )
         self.dropdown_obj2.grid(row=0, column=3, padx=5, pady=5)
 
@@ -880,8 +880,9 @@ class OWFLOGui(ctk.CTk):
             # 2. Write the config.inp file using the unified method
             self.opt_mode_var.set("SOGA") # Force mode to SOGA
             try:
-                # Pass the variables extracted at the top of run_soga_pipeline
-                self.generate_config_file(it_max, n_pop, p_cross, p_mut, mu, max_turbs, min_turbs, workability)
+                # Pass the variables extracted at the top of run_soga_pipeline (include SOGA stall tolerance)
+                soga_stall = int(self.soga_stall.get()) if self.soga_stall.get() else 0
+                self.generate_config_file(it_max, n_pop, p_cross, p_mut, mu, max_turbs, min_turbs, workability, soga_stall)
             except Exception as e:
                 self.log(f"🔴 ERROR writing config file: {e}")
                 self.after(0, lambda: self.btn_run_soga.configure(state="normal"))
@@ -1312,7 +1313,7 @@ class OWFLOGui(ctk.CTk):
         self.dropdown_obj1.configure(values=opts1)
         self.dropdown_obj2.configure(values=opts2)
 
-    def generate_config_file(self, it_max, n_pop, p_cross, p_mut, mu, max_turbs, min_turbs, workability):
+    def generate_config_file(self, it_max, n_pop, p_cross, p_mut, mu, max_turbs, min_turbs, workability, soga_stall=0):
         """Writes the config.inp file before launching Fortran."""
         
         # Determine Opt Mode
@@ -1333,6 +1334,7 @@ class OWFLOGui(ctk.CTk):
             f.write(f"{mu}\n")
             f.write(f"{max_turbs}\n")
             f.write(f"{min_turbs}\n")
+            f.write(f"{soga_stall}\n")
             f.write(f"{workability}\n")
             f.write(f"{opt_mode_int}\n")
             f.write(f"{obj1_int}\n")
