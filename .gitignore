@@ -13,3 +13,8 @@ outputs/*
 
 # ...but do NOT ignore the .gitkeep file
 !outputs/.gitkeep
+inputs/config.inp
+inputs/wind_analytics.json
+inputs/wind_rose_matrix.dat
+source/moga_optimizer.exe
+inputs/config.inp
