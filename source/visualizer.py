@@ -34,7 +34,7 @@ def _get_moga_objectives():
         1: ('LCOE', 'Minimize', 'Levelized Cost of Energy'), 
         2: ('raw_cost', 'Minimize', 'Total CAPEX (£)'),
         3: ('raw_aep', 'Maximize', 'Annual Energy Production (MWh)'), 
-        4: ('raw_fatigue', 'Minimize', 'Total Fatigue Damage')
+        4: ('raw_fatigue', 'Maximize', 'Normalized Fatigue Life')
     }
     try:
         with open('./inputs/config.inp', 'r') as f:
@@ -79,7 +79,7 @@ def save_pareto_plots(output_dir='./outputs'):
             'LCOE': 'Levelized Cost of Energy (£/MWh)',
             'raw_cost': 'Total CAPEX (£)',
             'raw_aep': 'Annual Energy Production (GWh/Year)',
-            'raw_fatigue': 'Fatigue Damage Index [-]'
+            'raw_fatigue': 'Normalized Fatigue Life [-]'
         }
         base_name = unit_map.get(col_name, col_name)
         dir_text = "Lower" if direction == "Minimize" else "Higher"
@@ -557,8 +557,9 @@ def save_soga_convergence_plot(output_dir='./outputs', target_obj="Cost"):
         y_label = 'Levelized Cost of Energy (£/MWh)'
         title_obj = 'Minimize LCOE'
     elif "FATIGUE" in target_upper:
-        y_label = 'Total Fatigue Damage (Equivalent Load)'
-        title_obj = 'Minimize Fatigue'
+        y_label = 'Normalized Fatigue Life [-]'
+        title_obj = 'Maximize Normalized Fatigue Life'
+        # df['best_fitness'] = df['best_fitness'].abs()
     elif "COST" in target_upper or "CAPEX" in target_upper:
         y_label = 'Total Capital Expenditure (£)'
         title_obj = 'Minimize CAPEX'
@@ -601,7 +602,7 @@ def generate_soga_3d_layout(target_obj="Cost", z_scale=5.0, turb_path=None):
     df_best = pd.read_csv('./outputs/soga_best_layout.csv')
     gene_cols = [c for c in df_best.columns if 'gene' in c.lower()]
     genes = df_best.iloc[0][gene_cols].astype(int).values
-    fitness_val = abs(df_best.iloc[0]['fitness']) if "AEP" in target_obj else df_best.iloc[0]['fitness']
+    fitness_val = abs(df_best.iloc[0]['fitness']) if ("AEP" in target_obj.upper() or "FATIGUE" in target_obj.upper()) else df_best.iloc[0]['fitness']
     
     plotter = pv.Plotter(shape=(1, 1), window_size=[900, 700]) 
     plotter.set_background('white') # Changed to white for better professional contrast
