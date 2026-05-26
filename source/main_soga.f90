@@ -62,13 +62,13 @@ PROGRAM run_soga
         END IF
 
         ! Save Convergence History
-        CALL soga_save_convergence(generation, parent_pop, TRIM(config%out_dir) // 'soga_convergence.csv')
+        CALL soga_save_convergence(generation, parent_pop, TRIM(config%out_dir) // 'soga_convergence.csv', config)
     END DO
 
     PRINT *, "Optimization complete. Saving final outputs..."
     
     ! 4. Save Final SOGA Outputs
-    CALL soga_save_best_layout(parent_pop, TRIM(config%out_dir) // 'soga_best_layout.csv')
+    CALL soga_save_best_layout(parent_pop, TRIM(config%out_dir) // 'soga_best_layout.csv', config)
     CALL soga_save_animation_data(parent_pop, site, turbines, config)
     
     CALL cleanup_memory(config, site, turbines, parent_pop, offspring_pop, combined_pop)

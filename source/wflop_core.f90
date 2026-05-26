@@ -51,6 +51,14 @@ MODULE types
         CHARACTER(LEN=512) :: f_bathy
         CHARACTER(LEN=512) :: f_dist
         CHARACTER(LEN=512) :: out_dir
+        
+        ! --- Soft Constraint Controls ---
+        INTEGER  :: use_soft_constraints = 0  ! 0 = disabled, 1 = enabled
+        REAL(wp) :: aep_min_soft = 0.0_wp     ! Minimum acceptable AEP (inactive if <=0)
+        REAL(wp) :: capex_max_soft = 0.0_wp   ! Maximum acceptable CAPEX (inactive if <=0)
+        REAL(wp) :: w_aep_soft = 0.0_wp       ! Penalty weight for AEP violation
+        REAL(wp) :: w_capex_soft = 0.0_wp     ! Penalty weight for CAPEX violation
+        REAL(wp) :: soft_penalty_power = 2.0_wp ! Exponent applied to normalized violation
     END TYPE ConfigData
 
     ! ==================================================================
@@ -124,6 +132,13 @@ MODULE types
         real(wp)              :: raw_fatigue   ! Normalized Fatigue Life [-], higher is better
         REAL(wp)              :: fitness       ! Scalar fitness score used ONLY by SOGA
         
+        ! --- Soft-constraint diagnostics (do NOT replace raw metrics) ---
+        REAL(wp)              :: soft_aep_violation = 0.0_wp
+        REAL(wp)              :: soft_capex_violation = 0.0_wp
+        REAL(wp)              :: penalty_aep = 1.0_wp
+        REAL(wp)              :: penalty_capex = 1.0_wp
+        REAL(wp)              :: penalty_lcoe = 1.0_wp
+        
         ! --- NSGA-II METRICS ---
         REAL(wp), ALLOCATABLE :: obj_vals(:)   ! Objective outputs for NSGA-II
         INTEGER               :: rank          ! NSGA-II non-domination front
@@ -189,6 +204,14 @@ CONTAINS
         READ(f_unit, *) config%obj_1
         READ(f_unit, *) config%obj_2
         READ(f_unit, *) config%wind_mode
+
+        ! Soft-constraints 
+        READ(f_unit, *) config%use_soft_constraints
+        READ(f_unit, *) config%aep_min_soft
+        READ(f_unit, *) config%capex_max_soft
+        READ(f_unit, *) config%w_aep_soft
+        READ(f_unit, *) config%w_capex_soft
+        READ(f_unit, *) config%soft_penalty_power
         
         ! Read File Paths
         READ(f_unit, *) config%f_turb
@@ -211,6 +234,13 @@ CONTAINS
         config%max_iter = 10
         config%farmlifetime = 25
         PRINT *, "Configuration loaded successfully."
+        ! Safety corrections for soft-constraint parameters
+        IF (config%use_soft_constraints /= 0 .AND. config%use_soft_constraints /= 1) THEN
+            config%use_soft_constraints = 0
+        END IF
+        IF (config%w_aep_soft < 0.0_wp) config%w_aep_soft = 0.0_wp
+        IF (config%w_capex_soft < 0.0_wp) config%w_capex_soft = 0.0_wp
+        IF (config%soft_penalty_power <= 0.0_wp) config%soft_penalty_power = 2.0_wp
         
     END SUBROUTINE read_gui_config
 
@@ -1617,8 +1647,106 @@ MODULE NSGA_II
     public :: init_random_seed
     PUBLIC :: crossover
     PUBLIC :: mutate
+    ! Expose soft-constraint helpers to other modules (e.g., SOGA)
+    PUBLIC :: objective_requires_cost
+    PUBLIC :: objective_requires_physics
+    PUBLIC :: evaluate_soft_constraints
+    PUBLIC :: map_objective_value
 
 CONTAINS
+
+    ! ------------------------------------------------------------------
+    ! Helper: Does this objective require cost evaluation?
+    ! obj_id: 1=LCOE,2=CAPEX,3=AEP,4=FATIGUE
+    ! ------------------------------------------------------------------
+    LOGICAL FUNCTION objective_requires_cost(obj_id)
+        INTEGER, INTENT(IN) :: obj_id
+        SELECT CASE (obj_id)
+            CASE (1,2)
+                objective_requires_cost = .TRUE.
+            CASE DEFAULT
+                objective_requires_cost = .FALSE.
+        END SELECT
+    END FUNCTION objective_requires_cost
+
+    ! ------------------------------------------------------------------
+    ! Helper: Does this objective require physics evaluation?
+    ! ------------------------------------------------------------------
+    LOGICAL FUNCTION objective_requires_physics(obj_id)
+        INTEGER, INTENT(IN) :: obj_id
+        SELECT CASE (obj_id)
+            CASE (1,3,4)
+                objective_requires_physics = .TRUE.
+            CASE DEFAULT
+                objective_requires_physics = .FALSE.
+        END SELECT
+    END FUNCTION objective_requires_physics
+
+    ! ------------------------------------------------------------------
+    ! Subroutine: evaluate_soft_constraints
+    ! Calculates diagnostic violations and objective-local penalties only.
+    ! Does NOT change raw metrics or objective values.
+    ! ------------------------------------------------------------------
+    SUBROUTINE evaluate_soft_constraints(ind, config)
+        TYPE(Individual),  INTENT(INOUT) :: ind
+        TYPE(ConfigData),  INTENT(IN)    :: config
+
+        ! Initialize diagnostics and default penalties
+        ind%soft_aep_violation = 0.0_wp
+        ind%soft_capex_violation = 0.0_wp
+        ind%penalty_aep = 1.0_wp
+        ind%penalty_capex = 1.0_wp
+        ind%penalty_lcoe = 1.0_wp
+
+        IF (config%use_soft_constraints == 0) RETURN
+
+        IF (config%aep_min_soft > 0.0_wp) THEN
+            ind%soft_aep_violation = MAX(0.0_wp, (config%aep_min_soft - ind%raw_aep) / config%aep_min_soft)
+        END IF
+
+        IF (config%capex_max_soft > 0.0_wp) THEN
+            ind%soft_capex_violation = MAX(0.0_wp, (ind%raw_cost - config%capex_max_soft) / config%capex_max_soft)
+        END IF
+
+        ind%penalty_aep = 1.0_wp + config%w_aep_soft * ind%soft_aep_violation ** config%soft_penalty_power
+        ind%penalty_capex = 1.0_wp + config%w_capex_soft * ind%soft_capex_violation ** config%soft_penalty_power
+        ind%penalty_lcoe = 1.0_wp + config%w_aep_soft * ind%soft_aep_violation ** config%soft_penalty_power &
+                          + config%w_capex_soft * ind%soft_capex_violation ** config%soft_penalty_power
+
+    END SUBROUTINE evaluate_soft_constraints
+
+    ! ------------------------------------------------------------------
+    ! Subroutine: map_objective_value
+    ! Maps raw physical/economic metrics into GA-facing objective values
+    ! applying objective-local penalties as required.
+    ! ------------------------------------------------------------------
+    SUBROUTINE map_objective_value(ind, obj_id, config, obj_value)
+        TYPE(Individual), INTENT(IN) :: ind
+        INTEGER,          INTENT(IN) :: obj_id
+        TYPE(ConfigData), INTENT(IN) :: config
+        REAL(wp),         INTENT(OUT):: obj_value
+
+        REAL(wp) :: true_lcoe
+
+        SELECT CASE (obj_id)
+            CASE (1) ! LCOE: depends on both cost and AEP
+                IF (ind%raw_aep <= 0.0_wp) THEN
+                    obj_value = HUGE(1.0_wp)
+                ELSE
+                    true_lcoe = ind%raw_cost / (ind%raw_aep * REAL(config%farmlifetime, wp))
+                    obj_value = true_lcoe * ind%penalty_lcoe
+                END IF
+            CASE (2) ! CAPEX
+                obj_value = ind%raw_cost * ind%penalty_capex
+            CASE (3) ! AEP (maximised -> minimised as negative)
+                obj_value = - ind%raw_aep / ind%penalty_aep
+            CASE (4) ! Fatigue (no soft penalties yet)
+                obj_value = - ind%raw_fatigue
+            CASE DEFAULT
+                obj_value = HUGE(1.0_wp)
+        END SELECT
+
+    END SUBROUTINE map_objective_value
 
     ! ! ==================================================================
     ! ! 1. INITIALIZATION & EVALUATION
@@ -1720,41 +1848,52 @@ CONTAINS
         TYPE(TurbineSpec), INTENT(IN)    :: turbines(:)
         TYPE(ConfigData),  INTENT(IN)    :: config
         INTEGER :: i, n_turb
+        LOGICAL :: need_cost, need_physics
+        REAL(wp) :: tmp_val
         
-        !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i, n_turb)
+        !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i, n_turb, need_cost, need_physics, tmp_val)
         DO i = 1, SIZE(pop%inds)
             n_turb = COUNT(pop%inds(i)%chromosome > 1)
-            
-            ! Penalty wall
-            IF (n_turb > config%max_turbs .or. n_turb < config%min_turbs) THEN
-                pop%inds(i)%raw_cost = HUGE(1.0_wp)  ! Massive penalty
-                pop%inds(i)%raw_aep  = 0.0_wp        ! Zero energy
-                
-                pop%inds(i)%obj_vals(1) = HUGE(1.0_wp) 
-                pop%inds(i)%obj_vals(2) = HUGE(1.0_wp) 
+
+            ! Penalty wall handling for invalid turbine counts
+            IF (n_turb > config%max_turbs .OR. n_turb < config%min_turbs) THEN
+                pop%inds(i)%raw_cost = HUGE(1.0_wp)
+                pop%inds(i)%raw_aep  = 0.0_wp
+                pop%inds(i)%raw_fatigue = 0.0_wp
+
+                pop%inds(i)%soft_aep_violation = 0.0_wp
+                pop%inds(i)%soft_capex_violation = 0.0_wp
+                pop%inds(i)%penalty_aep = HUGE(1.0_wp)
+                pop%inds(i)%penalty_capex = HUGE(1.0_wp)
+                pop%inds(i)%penalty_lcoe = HUGE(1.0_wp)
+
+                pop%inds(i)%obj_vals(1) = HUGE(1.0_wp)
+                pop%inds(i)%obj_vals(2) = HUGE(1.0_wp)
             ELSE
-                ! 1. Calculate raw physics and costs
-                CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
-                CALL evaluate_physics(pop%inds(i), site, turbines, config)
-                
-                ! 2. Explicitly map Objective 1
-                SELECT CASE(config%obj_1)
-                    CASE(1); pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_cost / &
-                        (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
-                    CASE(2); pop%inds(i)%obj_vals(1) = pop%inds(i)%raw_cost
-                    CASE(3); pop%inds(i)%obj_vals(1) = -pop%inds(i)%raw_aep
-                    CASE(4); pop%inds(i)%obj_vals(1) = -pop%inds(i)%raw_fatigue
-                END SELECT
-                
-                ! 3. Explicitly map Objective 2
-                SELECT CASE(config%obj_2)
-                    CASE(1); pop%inds(i)%obj_vals(2) = pop%inds(i)%raw_cost / &
-                        (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
-                    CASE(2); pop%inds(i)%obj_vals(2) = pop%inds(i)%raw_cost
-                    CASE(3); pop%inds(i)%obj_vals(2) = -pop%inds(i)%raw_aep
-                    CASE(4); pop%inds(i)%obj_vals(2) = -pop%inds(i)%raw_fatigue
-                END SELECT
-            END IF  
+                ! Determine which expensive evaluations are required
+                need_cost = objective_requires_cost(config%obj_1) .OR. objective_requires_cost(config%obj_2)
+                need_physics = objective_requires_physics(config%obj_1) .OR. objective_requires_physics(config%obj_2)
+
+                IF (need_cost) THEN
+                    CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
+                ELSE
+                    pop%inds(i)%raw_cost = 0.0_wp
+                END IF
+
+                IF (need_physics) THEN
+                    CALL evaluate_physics(pop%inds(i), site, turbines, config)
+                ELSE
+                    pop%inds(i)%raw_aep = 0.0_wp
+                    pop%inds(i)%raw_fatigue = 0.0_wp
+                END IF
+
+                ! Compute diagnostics and penalty factors (no mutation of raw metrics)
+                CALL evaluate_soft_constraints(pop%inds(i), config)
+
+                ! Map configured objectives using the centralized mapper
+                CALL map_objective_value(pop%inds(i), config%obj_1, config, pop%inds(i)%obj_vals(1))
+                CALL map_objective_value(pop%inds(i), config%obj_2, config, pop%inds(i)%obj_vals(2))
+            END IF
         END DO
         !$OMP END PARALLEL DO
     END SUBROUTINE evaluate_population
@@ -2349,7 +2488,9 @@ MODULE SOGA
 
     USE precision, ONLY: wp
     USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Individual, Population
-    USE NSGA_II,   ONLY: crossover, mutate  ! Reuse physical operators
+    USE NSGA_II,   ONLY: crossover, mutate, objective_requires_cost, &
+                            objective_requires_physics, evaluate_soft_constraints, &
+                            map_objective_value  ! Reuse helpers and operators
     USE physics,   ONLY: evaluate_physics
     USE costs,     ONLY: evaluate_financial_cost
 
@@ -2373,38 +2514,46 @@ CONTAINS
         TYPE(TurbineSpec), INTENT(IN)    :: turbines(:)
         TYPE(ConfigData),  INTENT(IN)    :: config
         INTEGER :: i, n_turb
-        
-        !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i, n_turb)
+        LOGICAL :: need_cost, need_physics
+
+        !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i, n_turb, need_cost, need_physics)
         DO i = 1, SIZE(pop%inds)
             n_turb = COUNT(pop%inds(i)%chromosome > 1)
-            
-            ! Penalty wall
-            IF (n_turb > config%max_turbs .or. n_turb < config%min_turbs) THEN
-                ! If invalid, assign terrible fitness instantly and skip physics
-                pop%inds(i)%fitness = HUGE(1.0_wp)  
-            ELSE
-                ! --- LAZY EVALUATION ROUTING ---
-                SELECT CASE(config%obj_1)
-                    CASE(1) ! LCOE
-                        CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
-                        CALL evaluate_physics(pop%inds(i), site, turbines, config)
-                        pop%inds(i)%fitness = pop%inds(i)%raw_cost / &
-                                            (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp))
-                    CASE(2) ! CAPEX
-                        CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
-                        pop%inds(i)%fitness = pop%inds(i)%raw_cost
-                    CASE(3) ! AEP
-                        CALL evaluate_physics(pop%inds(i), site, turbines, config)
-                        pop%inds(i)%fitness = -pop%inds(i)%raw_aep
-                    CASE(4) ! Fatigue Life
-                        CALL evaluate_physics(pop%inds(i), site, turbines, config)
 
-                        ! raw_fatigue is Normalized Fatigue Life [-], higher is better.
-                        ! SOGA minimizes fitness, so use the negative value as done for AEP.
-                        pop%inds(i)%fitness = -pop%inds(i)%raw_fatigue
-                END SELECT
-                
-            END IF  
+            ! Penalty wall
+            IF (n_turb > config%max_turbs .OR. n_turb < config%min_turbs) THEN
+                pop%inds(i)%fitness = HUGE(1.0_wp)
+                pop%inds(i)%raw_cost = HUGE(1.0_wp)
+                pop%inds(i)%raw_aep = 0.0_wp
+                pop%inds(i)%raw_fatigue = 0.0_wp
+
+                pop%inds(i)%soft_aep_violation = 0.0_wp
+                pop%inds(i)%soft_capex_violation = 0.0_wp
+                pop%inds(i)%penalty_aep = HUGE(1.0_wp)
+                pop%inds(i)%penalty_capex = HUGE(1.0_wp)
+                pop%inds(i)%penalty_lcoe = HUGE(1.0_wp)
+            ELSE
+                ! Determine required expensive evaluations for this SOGA objective
+                need_cost = objective_requires_cost(config%obj_1)
+                need_physics = objective_requires_physics(config%obj_1)
+
+                IF (need_cost) THEN
+                    CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
+                ELSE
+                    pop%inds(i)%raw_cost = 0.0_wp
+                END IF
+
+                IF (need_physics) THEN
+                    CALL evaluate_physics(pop%inds(i), site, turbines, config)
+                ELSE
+                    pop%inds(i)%raw_aep = 0.0_wp
+                    pop%inds(i)%raw_fatigue = 0.0_wp
+                END IF
+
+                CALL evaluate_soft_constraints(pop%inds(i), config)
+
+                CALL map_objective_value(pop%inds(i), config%obj_1, config, pop%inds(i)%fitness)
+            END IF
         END DO
         !$OMP END PARALLEL DO
     END SUBROUTINE soga_evaluate_population
@@ -2581,7 +2730,7 @@ contains
                 STOP
             END IF
             ! Output all metrics so Python can dynamically choose which to plot
-            WRITE(f_unit, '(A)') 'generation,LCOE,raw_cost,raw_aep,raw_fatigue'
+            WRITE(f_unit, '(A)') 'generation,LCOE,raw_cost,raw_aep,raw_fatigue,soft_aep_violation,soft_capex_violation,penalty_aep,penalty_capex,penalty_lcoe'
         ELSE
             ! Subsequent generations: Open the existing file and jump to the bottom
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', POSITION='APPEND', IOSTAT=ios)
@@ -2595,12 +2744,17 @@ contains
         DO i = 1, SIZE(pop%inds)
             IF (pop%inds(i)%rank == 1) THEN
                 ! Write Generation, LCOE, Cost, AEP, and Fatigue
-                WRITE(f_unit, '(I0,A,F25.1,A,F25.1,A,F25.1,A,F25.5)') &
+                WRITE(f_unit, '(I0,A,F25.1,A,F25.1,A,F25.1,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5)') &
                     gen_num, ',', &
                     pop%inds(i)%raw_cost / (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp)), ',', &
                     pop%inds(i)%raw_cost, ',', &
                     pop%inds(i)%raw_aep, ',', &
-                    pop%inds(i)%raw_fatigue
+                    pop%inds(i)%raw_fatigue, ',', &
+                    pop%inds(i)%soft_aep_violation, ',', &
+                    pop%inds(i)%soft_capex_violation, ',', &
+                    pop%inds(i)%penalty_aep, ',', &
+                    pop%inds(i)%penalty_capex, ',', &
+                    pop%inds(i)%penalty_lcoe
             END IF
         END DO
         
@@ -2631,7 +2785,7 @@ contains
         END IF
 
         ! Write dynamic header
-        WRITE(f_unit, '(A)', ADVANCE='NO') 'LCOE,raw_cost,raw_aep,raw_fatigue'
+        WRITE(f_unit, '(A)', ADVANCE='NO') 'LCOE,raw_cost,raw_aep,raw_fatigue,soft_aep_violation,soft_capex_violation,penalty_aep,penalty_capex,penalty_lcoe'
         DO j = 1, n_var
             WRITE(f_unit, '(A,I0)', ADVANCE='NO') ',gene_', j
         END DO
@@ -2642,10 +2796,15 @@ contains
             IF (pop%inds(i)%rank == 1) THEN
                 
                 ! Write Objective 1 (Cost) and Objective 2 (+AEP, mathematically restored)
-                WRITE(f_unit, '(F25.1,A,F25.1,A,F25.5,A,F25.5)', ADVANCE='NO') &
+                WRITE(f_unit, '(F25.1,A,F25.1,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5)', ADVANCE='NO') &
                     pop%inds(i)%raw_cost / (pop%inds(i)%raw_aep * REAL(config%farmlifetime, wp)), &
                     ',', pop%inds(i)%raw_cost, ',', pop%inds(i)%raw_aep, ',', &
-                    pop%inds(i)%raw_fatigue
+                    pop%inds(i)%raw_fatigue, ',', &
+                    pop%inds(i)%soft_aep_violation, ',', &
+                    pop%inds(i)%soft_capex_violation, ',', &
+                    pop%inds(i)%penalty_aep, ',', &
+                    pop%inds(i)%penalty_capex, ',', &
+                    pop%inds(i)%penalty_lcoe
 
                 ! Write all the genes of its chromosome on the same line
                 DO j = 1, n_var
@@ -2810,43 +2969,54 @@ contains
     ! ==================================================================
     ! SOGA OUTPUT 1: Convergence History
     ! ==================================================================
-    SUBROUTINE soga_save_convergence(gen_num, pop, filename)
+    SUBROUTINE soga_save_convergence(gen_num, pop, filename, config)
         INTEGER,          INTENT(IN) :: gen_num
         TYPE(Population), INTENT(IN) :: pop
         CHARACTER(LEN=*), INTENT(IN) :: filename
+        TYPE(ConfigData), INTENT(IN) :: config
         INTEGER :: f_unit, ios
 
         IF (gen_num == 1) THEN
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='REPLACE', IOSTAT=ios)
             IF (ios /= 0) STOP " ERROR: Could not create SOGA convergence file."
-            WRITE(f_unit, '(A)') 'generation,best_fitness'
+            WRITE(f_unit, '(A)') 'generation,best_fitness,raw_cost,raw_aep,LCOE,raw_fatigue,soft_aep_violation,soft_capex_violation,penalty_aep,penalty_capex,penalty_lcoe'
         ELSE
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', POSITION='APPEND', IOSTAT=ios)
         END IF
 
         ! Because soga_assign_fitness sorts the array, index 1 is ALWAYS the absolute best solution.
-        WRITE(f_unit, '(I0,A,F25.5)') gen_num, ',', abs(pop%inds(1)%fitness)
+        WRITE(f_unit, '(I0,A,F25.5,A,F25.1,A,F25.5,A,F25.1,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5)') &
+            gen_num, ',', abs(pop%inds(1)%fitness), ',', pop%inds(1)%raw_cost, ',', pop%inds(1)%raw_aep, ',', &
+            (pop%inds(1)%raw_cost / (pop%inds(1)%raw_aep * REAL(config%farmlifetime, wp))), ',', pop%inds(1)%raw_fatigue, ',', &
+            pop%inds(1)%soft_aep_violation, ',', pop%inds(1)%soft_capex_violation, ',', &
+            pop%inds(1)%penalty_aep, ',', pop%inds(1)%penalty_capex, ',', pop%inds(1)%penalty_lcoe
         CLOSE(f_unit)
     END SUBROUTINE soga_save_convergence
 
     ! ==================================================================
     ! SOGA OUTPUT 2: The Champion Layout
     ! ==================================================================
-    SUBROUTINE soga_save_best_layout(pop, filename)
+    SUBROUTINE soga_save_best_layout(pop, filename, config)
         TYPE(Population), INTENT(IN) :: pop
         CHARACTER(LEN=*), INTENT(IN) :: filename
+        TYPE(ConfigData), INTENT(IN) :: config
         INTEGER :: j, f_unit, ios, n_var
 
         n_var = SIZE(pop%inds(1)%chromosome)
         OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='REPLACE', IOSTAT=ios)
 
-        WRITE(f_unit, '(A)', ADVANCE='NO') 'fitness'
+        WRITE(f_unit, '(A)', ADVANCE='NO') 'fitness,raw_cost,raw_aep,LCOE,raw_fatigue,soft_aep_violation,soft_capex_violation,penalty_aep,penalty_capex,penalty_lcoe'
         DO j = 1, n_var
             WRITE(f_unit, '(A,I0)', ADVANCE='NO') ',gene_', j
         END DO
         WRITE(f_unit, *)
 
-        WRITE(f_unit, '(F25.5)', ADVANCE='NO') pop%inds(1)%fitness
+        WRITE(f_unit, '(F25.5,A,F25.1,A,F25.5,A,F25.1,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5)', ADVANCE='NO') &
+            pop%inds(1)%fitness, ',', pop%inds(1)%raw_cost, ',', pop%inds(1)%raw_aep, ',', &
+            (pop%inds(1)%raw_cost / (pop%inds(1)%raw_aep * REAL(config%farmlifetime, wp))), ',', &
+            pop%inds(1)%raw_fatigue, ',', pop%inds(1)%soft_aep_violation, ',', pop%inds(1)%soft_capex_violation, ',', &
+            pop%inds(1)%penalty_aep, ',', pop%inds(1)%penalty_capex, ',', pop%inds(1)%penalty_lcoe
+
         DO j = 1, n_var
             WRITE(f_unit, '(A,I0)', ADVANCE='NO') ',', pop%inds(1)%chromosome(j)
         END DO
