@@ -67,6 +67,8 @@ class OWFLOGui(ctk.CTk):
         self.path_dist = ctk.StringVar(value="./inputs/site_distances.txt")
         self.path_out = ctk.StringVar(value="./outputs/")
         self.wind_calc_mode = ctk.StringVar(value="Time-Series")
+        # Soft-constraint GUI state
+        self.use_soft_constraints_var = ctk.BooleanVar(value=False)
 
 
         # =========================================================
@@ -350,8 +352,11 @@ class OWFLOGui(ctk.CTk):
     def build_farm_setup_tab(self):
         """Constructs the shared physical constraints and turbine selection."""
         
+        self.scroll_farm = ctk.CTkScrollableFrame(self.tab_farm, fg_color="transparent")
+        self.scroll_farm.pack(fill="both", expand=True)
+
         # 1. Global I/O Paths
-        io_frame = ctk.CTkFrame(self.tab_farm, corner_radius=10)
+        io_frame = ctk.CTkFrame(self.scroll_farm, corner_radius=10)
         io_frame.pack(fill="x", padx=10, pady=(10, 20))
         
         ctk.CTkLabel(io_frame, text="1. Target Simulation Files & Output Directory", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
@@ -376,7 +381,7 @@ class OWFLOGui(ctk.CTk):
         add_path_row(5, "Site Distances:", self.path_dist, "Browse", filetypes=[("Text", "*.txt")])
         add_path_row(6, "Output Directory:", self.path_out, "Folder", is_dir=True)
         # 2. Farm Constraints (Shared)
-        const_frame = ctk.CTkFrame(self.tab_farm, corner_radius=10)
+        const_frame = ctk.CTkFrame(self.scroll_farm, corner_radius=10)
         const_frame.pack(fill="x", padx=10, pady=0)
         
         ctk.CTkLabel(const_frame, text="2. Farm Design Constraints", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
@@ -398,6 +403,46 @@ class OWFLOGui(ctk.CTk):
         self.farm_work = ctk.CTkEntry(const_grid, width=100)
         self.farm_work.insert(0, "0.65")
         self.farm_work.grid(row=1, column=1, padx=5, pady=5)
+
+        # 3. Soft Objective Constraints
+        soft_frame = ctk.CTkFrame(self.scroll_farm, corner_radius=10)
+        soft_frame.pack(fill="x", padx=10, pady=(10, 10))
+
+        ctk.CTkLabel(soft_frame, text="3. Soft Objective Constraints", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
+        soft_grid = ctk.CTkFrame(soft_frame, fg_color="transparent")
+        soft_grid.pack(fill="x", padx=15, pady=5)
+
+        # Enable checkbox
+        self.chk_soft_enable = ctk.CTkCheckBox(soft_grid, text="Enable Soft Constraints", variable=self.use_soft_constraints_var)
+        self.chk_soft_enable.grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=5)
+
+        ctk.CTkLabel(soft_grid, text="Minimum AEP:").grid(row=1, column=0, sticky="e", padx=5, pady=5)
+        self.soft_aep_min = ctk.CTkEntry(soft_grid, width=150)
+        self.soft_aep_min.insert(0, "0.0")
+        self.soft_aep_min.grid(row=1, column=1, padx=5, pady=5)
+
+        ctk.CTkLabel(soft_grid, text="Maximum CAPEX:").grid(row=2, column=0, sticky="e", padx=5, pady=5)
+        self.soft_capex_max = ctk.CTkEntry(soft_grid, width=150)
+        self.soft_capex_max.insert(0, "0.0")
+        self.soft_capex_max.grid(row=2, column=1, padx=5, pady=5)
+
+        ctk.CTkLabel(soft_grid, text="AEP Penalty Weight:").grid(row=3, column=0, sticky="e", padx=5, pady=5)
+        self.soft_aep_weight = ctk.CTkEntry(soft_grid, width=150)
+        self.soft_aep_weight.insert(0, "10.0")
+        self.soft_aep_weight.grid(row=3, column=1, padx=5, pady=5)
+
+        ctk.CTkLabel(soft_grid, text="CAPEX Penalty Weight:").grid(row=4, column=0, sticky="e", padx=5, pady=5)
+        self.soft_capex_weight = ctk.CTkEntry(soft_grid, width=150)
+        self.soft_capex_weight.insert(0, "10.0")
+        self.soft_capex_weight.grid(row=4, column=1, padx=5, pady=5)
+
+        ctk.CTkLabel(soft_grid, text="Penalty Power:").grid(row=5, column=0, sticky="e", padx=5, pady=5)
+        self.soft_penalty_power = ctk.CTkEntry(soft_grid, width=150)
+        self.soft_penalty_power.insert(0, "2.0")
+        self.soft_penalty_power.grid(row=5, column=1, padx=5, pady=5)
+
+        ctk.CTkLabel(soft_frame, text="""Note: Threshold value 0 disables that specific soft constraint. 
+        Enter values using the same units as the raw AEP and CAPEX outputs.""", text_color="gray", font=ctk.CTkFont(size=11, slant="italic")).pack(anchor="w", padx=15, pady=(5,10))
 
     # ---------------------------------------------------------
     # UTILITY FUNCTIONS
@@ -1326,6 +1371,26 @@ class OWFLOGui(ctk.CTk):
         obj2_int = 0 if opt_mode_int == 1 else OBJ_MAPPING[self.obj2_var.get()]
         wind_mode_int = 1 if self.wind_calc_mode.get() == "Time-Series" else 2
 
+        # Safely parse soft-constraint inputs before writing config
+        use_soft_int = 1 if self.use_soft_constraints_var.get() else 0
+        try:
+            aep_min_soft = float(self.soft_aep_min.get())
+            capex_max_soft = float(self.soft_capex_max.get())
+            w_aep_soft = float(self.soft_aep_weight.get())
+            w_capex_soft = float(self.soft_capex_weight.get())
+            soft_penalty_power = float(self.soft_penalty_power.get())
+        except Exception as e:
+            self.log(f"🔴 ERROR: Invalid soft-constraint numeric value: {e}")
+            try:
+                self.btn_run_soga.configure(state="normal")
+            except Exception:
+                pass
+            try:
+                self.btn_run_moga.configure(state="normal")
+            except Exception:
+                pass
+            return
+
         with open('./inputs/config.inp', 'w') as f:
             f.write(f"{it_max}\n")
             f.write(f"{n_pop}\n")
@@ -1340,6 +1405,13 @@ class OWFLOGui(ctk.CTk):
             f.write(f"{obj1_int}\n")
             f.write(f"{obj2_int}\n")
             f.write(f"{wind_mode_int}\n")
+            # Soft-constraint block (must appear before file paths)
+            f.write(f"{use_soft_int}\n")
+            f.write(f"{aep_min_soft}\n")
+            f.write(f"{capex_max_soft}\n")
+            f.write(f"{w_aep_soft}\n")
+            f.write(f"{w_capex_soft}\n")
+            f.write(f"{soft_penalty_power}\n")
 
             # File Paths
             f.write(f'"{self.path_turb.get().replace(chr(92), "/")}"\n')
