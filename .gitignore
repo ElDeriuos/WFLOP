@@ -10,6 +10,9 @@ __pycache__/
 
 # Ignore everything in the outputs directory
 outputs/*
+output1/*
+
+inputs/*
 
 # ...but do NOT ignore the .gitkeep file
 !outputs/.gitkeep
