@@ -18,3 +18,13 @@ inputs/wind_analytics.json
 inputs/wind_rose_matrix.dat
 source/moga_optimizer.exe
 inputs/config.inp
+
+.kiro
+.hypothesis
+.pytest_cache
+.venv
+.vscode
+source/.vscode/
+source/__pycache__/
+
+tests/

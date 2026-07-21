@@ -1069,7 +1069,8 @@ CONTAINS
 
         ! --- SPARSE ARRAYS ---
         INTEGER, ALLOCATABLE  :: node_idx(:), type_turb(:), h_idx(:)
-        REAL(wp), ALLOCATABLE :: ws_new(:), ws_old(:), ti_new(:)
+        REAL(wp), ALLOCATABLE :: ws_new(:), ws_old(:)
+        REAL(wp), ALLOCATABLE :: ti_new(:)          ! Local turbulence intensity array (updated iteratively)
         REAL(wp), ALLOCATABLE :: wake_deficit_u(:), single_deficit_u(:)
         REAL(wp), ALLOCATABLE :: wake_added_i(:), single_added_i(:)
         REAL(wp), ALLOCATABLE :: fatigue_life(:)      ! Yang weighted fatigue life cycles, N_i,OPT
@@ -1134,20 +1135,24 @@ CONTAINS
                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
                     
                     CALL analytical_wake_sparse(m, n_idx, turbines(t_type), m_ct, site, turbines, config, &
-                                                n_turb, node_idx, type_turb, t_step, &
+                                                n_turb, node_idx, type_turb, t_step, ti_new, &
                                                 single_deficit_u, single_added_i)
                     
-                    ! Superposition: Sum of Squares for Velocity, TKE for Turbulence
-                    wake_deficit_u = wake_deficit_u + (single_deficit_u**2)
-                    wake_added_i   = wake_added_i + (single_added_i**2)
+                    ! Niayifar & Porté-Agel (2016), Equation 16: Uj = U∞ - Σ(Ui - Uij)
+                    ! Linear summation of normalized velocity deficits
+                    wake_deficit_u = wake_deficit_u + single_deficit_u
+                    ! Maximum turbulence selection (dominant source governs)
+                    ! Transition from squared-sum to MAX-based superposition
+                    wake_added_i   = MAX(wake_added_i, single_added_i)
                 END DO
 
                 ! Apply aggregated wake to local conditions
                 DO m = 1, n_turb
-                    IF (SQRT(wake_deficit_u(m)) < 1.0_wp) THEN
+                    IF (wake_deficit_u(m) < 1.0_wp) THEN  ! Direct deficit (no SQRT needed with linear superposition)
                         n_idx = node_idx(m)          
                         ws_new(m) = get_ambient_ws(site, config, n_idx, h_idx(m), t_step) * &
-                                                    (1.0_wp - SQRT(wake_deficit_u(m)))
+                                                    (1.0_wp - wake_deficit_u(m))
+                        ! TKE superposition: combine ambient with wake-added (already max-selected) TI
                         ti_new(m) = SQRT(I_ambient**2 + wake_added_i(m))
                     ELSE
                         ws_new(m) = 0.0_wp
@@ -1232,9 +1237,28 @@ CONTAINS
 
     ! ==================================================================
     ! SUBROUTINE: analytical_wake_sparse (Calculates dU and dI)
+    !
+    ! PURPOSE:
+    !   Computes wake velocity deficit and added turbulence intensity for
+    !   turbine m acting on all other turbines using the Bastankhah-Porté-Agel
+    !   Gaussian wake model with dynamic wake growth (Niayifar & Porté-Agel 2016).
+    !
+    ! KEY PARAMETERS:
+    !   ti_new(:)  - Local turbulence intensity at each turbine inflow
+    !                (dimensionless; drives dynamic wake growth rate)
+    !
+    ! WAKE GROWTH RATE:
+    !   k_star is now dynamic (not hardcoded): computed from Eq. 15 as
+    !   k* = 0.3837 * ti_local + 0.003678, where ti_local = ti_new(m).
+    !   Wake growth rate computed from Eq. 15, not hardcoded.
+    !   See: Niayifar & Porté-Agel (2016), Equation 15.
+    !
+    ! OUTPUTS:
+    !   deficit_u(:) - Normalised velocity deficit at each turbine [dimensionless]
+    !   added_i(:)   - Wake-added turbulence intensity at each turbine [dimensionless]
     ! ==================================================================
     SUBROUTINE analytical_wake_sparse(m, n_idx, t_spec, m_ct1, site, turbines, config, &
-                                  n_turb, node_idx, type_turb, t_step, deficit_u, added_i)
+                                  n_turb, node_idx, type_turb, t_step, ti_new, deficit_u, added_i)
         TYPE(SiteData),    INTENT(IN)  :: site
         TYPE(TurbineSpec), INTENT(IN)  :: turbines(:)
         TYPE(TurbineSpec), INTENT(IN)  :: t_spec
@@ -1242,15 +1266,18 @@ CONTAINS
         INTEGER,           INTENT(IN)  :: m, n_idx, n_turb, t_step
         INTEGER,           INTENT(IN)  :: node_idx(:), type_turb(:)
         REAL(wp),          INTENT(IN)  :: m_ct1
+        REAL(wp),          INTENT(IN)  :: ti_new(:)  ! Local turbulence intensity at each turbine inflow (dimensionless)
         REAL(wp),          INTENT(OUT) :: deficit_u(:), added_i(:) 
         
-        REAL(wp), PARAMETER :: k_star = 0.0324_wp 
+        ! Removed static k_star - now computed dynamically per Niayifar 2016 Eq. 15 
         
         REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake
         REAL(wp) :: dx, dy, x_rot, y_rot, x_rel
         REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord
         INTEGER  :: i, j_node, j_type
         REAL(wp) :: m_ct
+        REAL(wp) :: ti_local   ! Local TI at turbine m (dimensionless)
+        REAL(wp) :: k_star     ! Dynamic wake growth rate (dimensionless)
         
         deficit_u = 0.0_wp
         added_i   = 0.0_wp
@@ -1262,6 +1289,13 @@ CONTAINS
         h_wake = t_spec%hub_height
         m_ct   = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
         beta   = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
+        
+        ! Extract local turbulence intensity at the wake-producing turbine
+        ti_local = ti_new(m)
+        
+        ! Niayifar & Porté-Agel (2016), Equation 15
+        ! Wake expansion rate depends on local turbulence intensity
+        k_star = 0.3837_wp * ti_local + 0.003678_wp
 
         DO i = 1, n_turb
             IF (i == m) CYCLE

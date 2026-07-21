@@ -8,7 +8,6 @@ from source import distance_calculator
 from source import visualizer
 import os
 import sys
-import shutil
 import re
 import subprocess
 
@@ -16,9 +15,9 @@ import subprocess
 # DESIGN: GLOBAL THEME CONFIGURATION
 # =====================================================================
 # appearance_mode options: "System" (follows OS), "Dark", "Light"
-ctk.set_appearance_mode("Light")  
+ctk.set_appearance_mode("Light")
 # color_theme options: "blue" (standard), "green", "dark-blue"
-ctk.set_default_color_theme("dark-blue")  
+ctk.set_default_color_theme("dark-blue")
 
 OBJ_MAPPING = {
     "Minimize LCOE": 1,
@@ -36,7 +35,7 @@ class OWFLOGui(ctk.CTk):
         # --- Main Window Configuration ---
         self.title("OWFLO: Offshore Wind Farm Layout Optimizer")
         self.geometry("1400x850")
-        
+
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=2)
         self.grid_rowconfigure(0, weight=1)
@@ -58,7 +57,7 @@ class OWFLOGui(ctk.CTk):
         self.opt_mode_var = ctk.StringVar(value="SOGA")
         self.obj1_var = ctk.StringVar(value="Minimize LCOE")
         self.obj2_var = ctk.StringVar(value="Maximize Fatigue Life")
-        
+
         self.path_turb = ctk.StringVar(value="./inputs/turbine_spec.txt")
         self.path_mesh = ctk.StringVar(value="./inputs/windfarm_rocol.txt")
         self.path_wind1 = ctk.StringVar(value="./inputs/filtered_wind.txt")
@@ -115,10 +114,10 @@ class OWFLOGui(ctk.CTk):
     # ---------------------------------------------------------
     def build_soga_tab(self):
         """Constructs the Single-Objective inputs."""
-        
+
         soga_frame = ctk.CTkFrame(self.tab_soga, corner_radius=10)
         soga_frame.pack(fill="x", padx=10, pady=(10, 20))
-        
+
         ctk.CTkLabel(soga_frame, text="SOGA Hyperparameters", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         ga_grid = ctk.CTkFrame(soga_frame, fg_color="transparent")
@@ -153,11 +152,11 @@ class OWFLOGui(ctk.CTk):
 
         # SOGA Specifics
         ctk.CTkLabel(soga_frame, text="Target Objective:", font=ctk.CTkFont(weight="bold")).pack(pady=(10, 5), anchor="w", padx=15)
-        
+
         # Link this directly to the shared obj1_var
         self.soga_target = ctk.CTkOptionMenu(
-            soga_frame, 
-            values=list(OBJ_MAPPING.keys()), 
+            soga_frame,
+            values=list(OBJ_MAPPING.keys()),
             variable=self.obj1_var
         )
         self.soga_target.pack(fill="x", padx=15, pady=5)
@@ -166,9 +165,9 @@ class OWFLOGui(ctk.CTk):
         self.soga_stall = ctk.CTkEntry(soga_frame, placeholder_text="e.g., 50")
         self.soga_stall.insert(0, "50")
         self.soga_stall.pack(fill="x", padx=15, pady=(5, 15))
-        
+
         self.btn_run_soga = ctk.CTkButton(self.tab_soga, text="Run SOGA Optimization", height=40, font=ctk.CTkFont(weight="bold"),
-                                            command=self.run_soga_pipeline, fg_color="#2c824c", hover_color="#1d5c34") 
+                                            command=self.run_soga_pipeline, fg_color="#2c824c", hover_color="#1d5c34")
         self.btn_run_soga.pack(pady=10, fill="x", padx=10, side="bottom")
 
         # --- NEW: Compilation Action Buttons ---
@@ -176,13 +175,13 @@ class OWFLOGui(ctk.CTk):
         comp_frame.pack(fill="x", padx=10, pady=(15, 0), side="bottom")
 
         self.btn_compile_soga_debug = ctk.CTkButton(
-            comp_frame, text="⚙️ Compile SOGA (Debug)", fg_color="#b8860b", hover_color="#8a6508", 
+            comp_frame, text="⚙️ Compile SOGA (Debug)", fg_color="#b8860b", hover_color="#8a6508",
             command=lambda: self.run_compiler("debug", "soga")
         )
         self.btn_compile_soga_debug.pack(side="left", expand=True, fill="x", padx=(0, 5))
 
         self.btn_compile_soga_fast = ctk.CTkButton(
-            comp_frame, text="🚀 Compile SOGA (Fast)", fg_color="#b22222", hover_color="#8b1a1a", 
+            comp_frame, text="🚀 Compile SOGA (Fast)", fg_color="#b22222", hover_color="#8b1a1a",
             command=lambda: self.run_compiler("fast", "soga")
         )
         self.btn_compile_soga_fast.pack(side="left", expand=True, fill="x", padx=(5, 0))
@@ -210,7 +209,7 @@ class OWFLOGui(ctk.CTk):
         # Row 2: Animation & Dynamic Height Selection
         anim_row = ctk.CTkFrame(viz_frame_soga, fg_color="transparent")
         anim_row.pack(fill="x", pady=5)
-        
+
         ctk.CTkLabel(anim_row, text="Height:").pack(side="left", padx=(0, 2))
         self.soga_anim_height_dropdown = ctk.CTkOptionMenu(anim_row, values=["Run optimization first"], state="disabled", width=90)
         self.soga_anim_height_dropdown.pack(side="left", padx=(0, 10))
@@ -232,10 +231,10 @@ class OWFLOGui(ctk.CTk):
 
     def build_moga_tab(self):
         """Constructs the Multi-Objective (NSGA-II) inputs."""
-        
+
         ga_frame = ctk.CTkFrame(self.tab_moga, corner_radius=10)
         ga_frame.pack(fill="x", padx=10, pady=(10, 10))
-        
+
         ctk.CTkLabel(ga_frame, text="NSGA-II Hyperparameters", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         ga_grid = ctk.CTkFrame(ga_frame, fg_color="transparent")
@@ -269,17 +268,17 @@ class OWFLOGui(ctk.CTk):
         # MOGA Objectives
         obj_frame = ctk.CTkFrame(self.tab_moga, fg_color="transparent")
         obj_frame.pack(fill="x", padx=10, pady=(5, 10))
-        
+
         ctk.CTkLabel(obj_frame, text="Objective 1:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
         self.dropdown_obj1 = ctk.CTkOptionMenu(
-            obj_frame, values=list(OBJ_MAPPING.keys()), variable=self.obj1_var, 
+            obj_frame, values=list(OBJ_MAPPING.keys()), variable=self.obj1_var,
             command=lambda choice: self.enforce_unique_objectives(3)
         )
         self.dropdown_obj1.grid(row=0, column=1, padx=5, pady=5)
 
         ctk.CTkLabel(obj_frame, text="Objective 2:").grid(row=0, column=2, padx=5, pady=5, sticky="e")
         self.dropdown_obj2 = ctk.CTkOptionMenu(
-            obj_frame, values=list(OBJ_MAPPING.keys()), variable=self.obj2_var, 
+            obj_frame, values=list(OBJ_MAPPING.keys()), variable=self.obj2_var,
             command=lambda choice: self.enforce_unique_objectives(4)
         )
         self.dropdown_obj2.grid(row=0, column=3, padx=5, pady=5)
@@ -297,13 +296,13 @@ class OWFLOGui(ctk.CTk):
         comp_frame.pack(fill="x", padx=10, pady=(15, 0), side="bottom")
 
         self.btn_compile_moga_debug = ctk.CTkButton(
-            comp_frame, text="⚙️ Compile MOGA (Debug)", fg_color="#b8860b", hover_color="#8a6508", 
+            comp_frame, text="⚙️ Compile MOGA (Debug)", fg_color="#b8860b", hover_color="#8a6508",
             command=lambda: self.run_compiler("debug", "moga")
         )
         self.btn_compile_moga_debug.pack(side="left", expand=True, fill="x", padx=(0, 5))
 
         self.btn_compile_moga_fast = ctk.CTkButton(
-            comp_frame, text="🚀 Compile MOGA (Fast)", fg_color="#b22222", hover_color="#8b1a1a", 
+            comp_frame, text="🚀 Compile MOGA (Fast)", fg_color="#b22222", hover_color="#8b1a1a",
             command=lambda: self.run_compiler("fast", "moga")
         )
         self.btn_compile_moga_fast.pack(side="left", expand=True, fill="x", padx=(5, 0))
@@ -311,7 +310,7 @@ class OWFLOGui(ctk.CTk):
         # Row 1: Static Plots
         plot_row = ctk.CTkFrame(viz_frame_moga, fg_color="transparent")
         plot_row.pack(fill="x", pady=(0, 5))
-        
+
         self.btn_moga_pareto = ctk.CTkButton(plot_row, text="📊 Plot Pareto Front", state="normal", command=self.plot_moga_pareto)
         self.btn_moga_pareto.pack(side="left", padx=(0, 10), expand=True, fill="x")
 
@@ -327,7 +326,7 @@ class OWFLOGui(ctk.CTk):
         # Row 2: Animation Settings & Button (All on one line)
         anim_row = ctk.CTkFrame(viz_frame_moga, fg_color="transparent")
         anim_row.pack(fill="x", pady=5)
-        
+
         ctk.CTkLabel(anim_row, text="Height:").pack(side="left", padx=(0, 2))
         self.anim_height_dropdown = ctk.CTkOptionMenu(anim_row, values=["Run optimization first"], state="normal", width=90)
         self.anim_height_dropdown.pack(side="left", padx=(0, 5))
@@ -351,14 +350,14 @@ class OWFLOGui(ctk.CTk):
 
     def build_farm_setup_tab(self):
         """Constructs the shared physical constraints and turbine selection."""
-        
+
         self.scroll_farm = ctk.CTkScrollableFrame(self.tab_farm, fg_color="transparent")
         self.scroll_farm.pack(fill="both", expand=True)
 
         # 1. Global I/O Paths
         io_frame = ctk.CTkFrame(self.scroll_farm, corner_radius=10)
         io_frame.pack(fill="x", padx=10, pady=(10, 20))
-        
+
         ctk.CTkLabel(io_frame, text="1. Target Simulation Files & Output Directory", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
         ctk.CTkLabel(io_frame, text="Defaults point to the ./inputs/ and ./outputs/ folders. Change these if bypassing preprocessing.", text_color="gray", font=ctk.CTkFont(size=11, slant="italic")).pack(anchor="w", padx=15, pady=(0, 10))
 
@@ -370,7 +369,7 @@ class OWFLOGui(ctk.CTk):
             ctk.CTkLabel(io_grid, text=label_text).grid(row=row, column=0, sticky="e", padx=5, pady=5)
             entry = ctk.CTkEntry(io_grid, textvariable=string_var, width=350)
             entry.grid(row=row, column=1, padx=5, pady=5, sticky="w")
-            ctk.CTkButton(io_grid, text=btn_text, width=80, fg_color="#4a4a4a", hover_color="#333333", 
+            ctk.CTkButton(io_grid, text=btn_text, width=80, fg_color="#4a4a4a", hover_color="#333333",
                           command=lambda: self.select_path(string_var, f"Select {label_text}", is_dir, filetypes)).grid(row=row, column=2, padx=5, pady=5)
 
         add_path_row(0, "Turbine Master:", self.path_turb, "Browse", filetypes=[("Text/CSV", "*.txt *.csv *.dat")])
@@ -383,7 +382,7 @@ class OWFLOGui(ctk.CTk):
         # 2. Farm Constraints (Shared)
         const_frame = ctk.CTkFrame(self.scroll_farm, corner_radius=10)
         const_frame.pack(fill="x", padx=10, pady=0)
-        
+
         ctk.CTkLabel(const_frame, text="2. Farm Design Constraints", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         const_grid = ctk.CTkFrame(const_frame, fg_color="transparent")
@@ -441,7 +440,7 @@ class OWFLOGui(ctk.CTk):
         self.soft_penalty_power.insert(0, "2.0")
         self.soft_penalty_power.grid(row=5, column=1, padx=5, pady=5)
 
-        ctk.CTkLabel(soft_frame, text="""Note: Threshold value 0 disables that specific soft constraint. 
+        ctk.CTkLabel(soft_frame, text="""Note: Threshold value 0 disables that specific soft constraint.
         Enter values using the same units as the raw AEP and CAPEX outputs.""", text_color="gray", font=ctk.CTkFont(size=11, slant="italic")).pack(anchor="w", padx=15, pady=(5,10))
 
     # ---------------------------------------------------------
@@ -456,7 +455,7 @@ class OWFLOGui(ctk.CTk):
 
     def build_pre_processing_tab(self):
         """Constructs the Mesh, Bathymetry, and Upgraded Wind Data preparation tools."""
-        
+
         self.scroll_pre = ctk.CTkScrollableFrame(self.tab_pre, fg_color="transparent")
         self.scroll_pre.pack(fill="both", expand=True)
 
@@ -466,13 +465,13 @@ class OWFLOGui(ctk.CTk):
         mesh_frame = ctk.CTkFrame(self.scroll_pre, corner_radius=10)
         mesh_frame.pack(fill="x", padx=10, pady=(10, 20))
 
-        ctk.CTkLabel(mesh_frame, text="1. Spatial Mesh Generation", 
+        ctk.CTkLabel(mesh_frame, text="1. Spatial Mesh Generation",
                         font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         # Grid Resolution Inputs (dx, dy)
         res_frame = ctk.CTkFrame(mesh_frame, fg_color="transparent")
         res_frame.pack(fill="x", padx=15, pady=5)
-        
+
         ctk.CTkLabel(res_frame, text="Grid X (dx):").pack(side="left", padx=(0, 5))
         self.entry_dx = ctk.CTkEntry(res_frame, width=80)
         self.entry_dx.insert(0, "500.0")
@@ -488,11 +487,11 @@ class OWFLOGui(ctk.CTk):
         self.lbl_kml_status = ctk.CTkLabel(mesh_frame, text="No KML boundaries selected.",
                                             text_color="gray")
         self.lbl_kml_status.pack(anchor="w", padx=15, pady=(5, 0))
-        
+
         btn_row_1 = ctk.CTkFrame(mesh_frame, fg_color="transparent")
         btn_row_1.pack(fill="x", padx=15, pady=(5, 15))
-        
-        ctk.CTkButton(btn_row_1, text="Select KML Files", width=120, fg_color="#4a4a4a", hover_color="#333333", 
+
+        ctk.CTkButton(btn_row_1, text="Select KML Files", width=120, fg_color="#4a4a4a", hover_color="#333333",
                       command=self.select_kmls).pack(side="left", padx=(0, 10))
         self.btn_run_mesh = ctk.CTkButton(btn_row_1, text="Generate Mesh (Polygon3)", command=self.run_mesh_pipeline)
         self.btn_run_mesh.pack(side="left")
@@ -503,7 +502,7 @@ class OWFLOGui(ctk.CTk):
         bathy_frame = ctk.CTkFrame(self.scroll_pre, corner_radius=10)
         bathy_frame.pack(fill="x", padx=10, pady=(0, 20))
 
-        ctk.CTkLabel(bathy_frame, text="2. Bathymetry Extraction", 
+        ctk.CTkLabel(bathy_frame, text="2. Bathymetry Extraction",
                      font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         self.gebco_file = None
@@ -513,7 +512,7 @@ class OWFLOGui(ctk.CTk):
         btn_row_2 = ctk.CTkFrame(bathy_frame, fg_color="transparent")
         btn_row_2.pack(fill="x", padx=15, pady=(5, 15))
 
-        ctk.CTkButton(btn_row_2, text="Select GEBCO (.asc)", width=120, fg_color="#4a4a4a", 
+        ctk.CTkButton(btn_row_2, text="Select GEBCO (.asc)", width=120, fg_color="#4a4a4a",
                       hover_color="#333333", command=self.select_gebco).pack(side="left", padx=(0, 10))
         self.btn_run_bathy = ctk.CTkButton(btn_row_2, text="Extract Depths", command=self.run_bathy_pipeline)
         self.btn_run_bathy.pack(side="left")
@@ -524,7 +523,7 @@ class OWFLOGui(ctk.CTk):
         wind_frame = ctk.CTkFrame(self.scroll_pre, corner_radius=10)
         wind_frame.pack(fill="x", padx=10, pady=(0, 20))
 
-        ctk.CTkLabel(wind_frame, text="3. Wind Resource Assessment", 
+        ctk.CTkLabel(wind_frame, text="3. Wind Resource Assessment",
                      font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         self.era5_dir = None
@@ -536,10 +535,10 @@ class OWFLOGui(ctk.CTk):
         # Colors: selected_color sets the active state background, unselected_color is the idle background.
         mode_frame = ctk.CTkFrame(wind_frame, fg_color="transparent")
         mode_frame.pack(fill="x", padx=15, pady=(5, 10))
-        
+
         ctk.CTkLabel(mode_frame, text="Calculation Mode:").pack(side="left", padx=(0, 10))
         self.seg_wind_mode = ctk.CTkSegmentedButton(
-            mode_frame, 
+            mode_frame,
             values=["Time-Series", "Wind Rose Binning"],
             variable=self.wind_calc_mode,
             command=self.toggle_wind_mode,
@@ -550,13 +549,13 @@ class OWFLOGui(ctk.CTk):
 
         # --- B. TIME WINDOW FILTERS (Shared) ---
         tip_text = "💡 Tip: Hours are 0 to 23. Wrap-around is supported (e.g., Start 22, End 4)."
-        ctk.CTkLabel(wind_frame, text=tip_text, text_color="gray", 
+        ctk.CTkLabel(wind_frame, text=tip_text, text_color="gray",
                      font=ctk.CTkFont(size=11, slant="italic")).pack(anchor="w", padx=15, pady=(0, 5))
 
         # --- Time Window Filters Grid ---
         filter_frame = ctk.CTkFrame(wind_frame, fg_color="transparent")
         filter_frame.pack(fill="x", padx=15, pady=5)
-        
+
         # Headers
         ctk.CTkLabel(filter_frame, text="Start", font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, padx=5)
         ctk.CTkLabel(filter_frame, text="End", font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, padx=5)
@@ -625,33 +624,33 @@ class OWFLOGui(ctk.CTk):
         # Button 1: Directional Polar Distribution (Wind Rose)
         # CONFIGURATION HINT: Adjust 'fg_color' (hex string) and text padding here
         self.btn_plot_rose = ctk.CTkButton(
-            viz_btn_row, 
-            text=" Plot Wind Rose", 
+            viz_btn_row,
+            text=" Plot Wind Rose",
             fg_color="#3a5a80",        # Base widget fill tone
             hover_color="#2b4360",     # Dynamic cursor interaction color
             command=self.plot_wind_rose
         )
         # expand=True ensures both elements scale identically across horizontal space
         self.btn_plot_rose.pack(side="left", expand=True, fill="x", padx=(0, 5))
-        
+
         # Button 2: Integrated Velocity Analytics (Histogram + Weibull Fit Overlay)
         # CONFIGURATION HINT: Modify text parameters to customize font style or context scaling
         self.btn_plot_speed = ctk.CTkButton(
-            viz_btn_row, 
-            text=" Plot Weilbull Fit", 
+            viz_btn_row,
+            text=" Plot Weilbull Fit",
             fg_color="#3a806c",        # Base widget fill tone matching the analytics theme
             hover_color="#2b6051",     # Dynamic cursor interaction color
             command=self.plot_wind_speed_diagnostics
         )
         self.btn_plot_speed.pack(side="left", expand=True, fill="x", padx=(5, 0))
-        
+
         # ==========================================
         # 4. DISTANCE CALCULATOR FRAME
         # ==========================================
         dist_frame = ctk.CTkFrame(self.scroll_pre, corner_radius=10)
         dist_frame.pack(fill="x", padx=10, pady=(0, 20))
 
-        ctk.CTkLabel(dist_frame, text="4. Logistics & Site Distances", 
+        ctk.CTkLabel(dist_frame, text="4. Logistics & Site Distances",
                      font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
 
         self.shoreline_kml = None
@@ -663,27 +662,27 @@ class OWFLOGui(ctk.CTk):
         dist_grid.pack(fill="x", padx=15, pady=5)
 
         # Row 1: Shoreline
-        ctk.CTkButton(dist_grid, text="Shoreline KML", width=120, 
-                      fg_color="#4a4a4a", hover_color="#333333", 
+        ctk.CTkButton(dist_grid, text="Shoreline KML", width=120,
+                      fg_color="#4a4a4a", hover_color="#333333",
                       command=self.select_shoreline).grid(row=0, column=0, pady=2, sticky="w")
         self.lbl_shore_status = ctk.CTkLabel(dist_grid, text="Pending...", text_color="gray")
         self.lbl_shore_status.grid(row=0, column=1, padx=10, sticky="w")
 
         # Row 2: Grid Connection
-        ctk.CTkButton(dist_grid, text="Grid Conn. KML", width=120, 
-                      fg_color="#4a4a4a", hover_color="#333333", 
+        ctk.CTkButton(dist_grid, text="Grid Conn. KML", width=120,
+                      fg_color="#4a4a4a", hover_color="#333333",
                       command=self.select_grid).grid(row=1, column=0, pady=2, sticky="w")
         self.lbl_grid_status = ctk.CTkLabel(dist_grid, text="Pending...", text_color="gray")
         self.lbl_grid_status.grid(row=1, column=1, padx=10, sticky="w")
 
         # Row 3: Port
-        ctk.CTkButton(dist_grid, text="Port KML", width=120, 
-                      fg_color="#4a4a4a", hover_color="#333333", 
+        ctk.CTkButton(dist_grid, text="Port KML", width=120,
+                      fg_color="#4a4a4a", hover_color="#333333",
                       command=self.select_port).grid(row=2, column=0, pady=2, sticky="w")
         self.lbl_port_status = ctk.CTkLabel(dist_grid, text="Pending...", text_color="gray")
         self.lbl_port_status.grid(row=2, column=1, padx=10, sticky="w")
 
-        self.btn_run_dist = ctk.CTkButton(dist_frame, text="Calculate Distances", 
+        self.btn_run_dist = ctk.CTkButton(dist_frame, text="Calculate Distances",
                                           command=self.run_distances_pipeline)
         self.btn_run_dist.pack(anchor="w", padx=15, pady=(10, 15))
 
@@ -697,31 +696,31 @@ class OWFLOGui(ctk.CTk):
             self.ent_vel_step.configure(state="disabled", fg_color="#e0e0e0", text_color="gray")
             self.log("Wind Mode switched to Time-Series. Chronological evaluation active.")
         else:
-            self.ent_dir_bins.configure(state="normal", fg_color=["#F9F9FA", "#343638"], 
+            self.ent_dir_bins.configure(state="normal", fg_color=["#F9F9FA", "#343638"],
                                         text_color=["#000000", "#FFFFFF"])
-            self.ent_vel_step.configure(state="normal", fg_color=["#F9F9FA", "#343638"], 
+            self.ent_vel_step.configure(state="normal", fg_color=["#F9F9FA", "#343638"],
                                         text_color=["#000000", "#FFFFFF"])
             self.log("Wind Mode switched to Wind Rose Binning. Empirical probability evaluation active.")
-            
+
     def abort_process(self):
         """Force-kills the currently running Fortran subprocess."""
         if self.running_process is not None and self.running_process.poll() is None:
             self.log("\n⚠️ ABORT SIGNAL SENT: Terminating Fortran process...")
-            
+
             try:
                 self.running_process.kill()  # Hard kill at the OS level
             except Exception as e:
                 self.log(f"🔴 Failed to kill process: {e}")
-    
+
     def select_path(self, var_name, title, is_dir=False, filetypes=None):
         if is_dir:
             path = filedialog.askdirectory(title=title)
             # Ensure output directories always end with a slash for Fortran string concatenation
-            if path: 
+            if path:
                 var_name.set(path + "/" if not path.endswith("/") else path)
         else:
             path = filedialog.askopenfilename(title=title, filetypes=filetypes)
-            if path: 
+            if path:
                 var_name.set(path)
 
     def select_kmls(self):
@@ -749,7 +748,7 @@ class OWFLOGui(ctk.CTk):
         if not self.kml_files_list:
             self.log("ERROR: Please select KML boundary files first.")
             return
-            
+
         # Disable button to prevent double-clicks
         self.btn_run_mesh.configure(state="disabled")
         dx = float(self.entry_dx.get())
@@ -764,7 +763,7 @@ class OWFLOGui(ctk.CTk):
             if metadata:
                 self.mesh_metadata = metadata
             self.log("Mesh Worker finished. ")
-            
+
             # Re-enable button safely
             self.after(0, lambda: self.btn_run_mesh.configure(state="normal"))
 
@@ -782,23 +781,23 @@ class OWFLOGui(ctk.CTk):
             self.log("--- Starting Bathymetry Extraction ---")
             # --- Uncomment when integrating the backend ---
             bathymetry_generator.process_bathymetry(
-                self.gebco_file, 
+                self.gebco_file,
                 output_callback=self.log
             )
             self.log("Bathymetry Worker finished. ")
             self.after(0, lambda: self.btn_run_bathy.configure(state="normal"))
 
         threading.Thread(target=worker, daemon=True).start()
-    
+
     # --- Wind Data Callbacks ---
     def select_era5(self):
         dir_path = filedialog.askdirectory(title="Select Directory Containing ERA5 .nc Files")
         if dir_path:
             self.era5_dir = dir_path
-            
+
             import glob
             nc_files = glob.glob(os.path.join(dir_path, "*.nc"))
-            
+
             # --- NEW: Dynamically parse years from filenames ---
             years = []
             for f in nc_files:
@@ -806,7 +805,7 @@ class OWFLOGui(ctk.CTk):
                 year_str = filename.replace('.nc', '') # gets "2005"
                 if year_str.isdigit():
                     years.append(int(year_str))
-            
+
             # Build the dynamic status message
             if years:
                 min_y, max_y = min(years), max(years)
@@ -816,7 +815,7 @@ class OWFLOGui(ctk.CTk):
 
             # Update the UI Label
             self.lbl_wind_status.configure(
-                text=f"Folder: {os.path.basename(dir_path)} ({len(nc_files)} files){year_info}", 
+                text=f"Folder: {os.path.basename(dir_path)} ({len(nc_files)} files){year_info}",
                 text_color="green"
             )
             self.log(f"Selected ERA5 directory. {year_info}")
@@ -843,14 +842,14 @@ class OWFLOGui(ctk.CTk):
 
         def worker():
             self.log("--- Starting Wind Data Interpolation ---")
-            
+
             # Pass BOTH the directory and the filters to your backend
             wind_generator.process_wind_data(
-                self.era5_dir, 
-                filters, 
+                self.era5_dir,
+                filters,
                 output_callback=self.log
             )
-            
+
             self.log("--- Wind Pipeline Complete ---")
             self.after(0, lambda: self.btn_run_wind.configure(state="normal"))
 
@@ -889,9 +888,9 @@ class OWFLOGui(ctk.CTk):
             self.log("--- Starting Distance Calculations ---")
             # --- Uncomment when integrating the backend ---
             distance_calculator.calculate_site_distances(
-                self.shoreline_kml, 
-                self.grid_kml, 
-                self.port_kml, 
+                self.shoreline_kml,
+                self.grid_kml,
+                self.port_kml,
                 output_callback=self.log
             )
             self.log("Distance Worker finished.")
@@ -901,7 +900,7 @@ class OWFLOGui(ctk.CTk):
 
     def run_soga_pipeline(self):
         self.btn_run_soga.configure(state="disabled")
-        
+
         try:
             it_max = int(self.soga_gen.get())
             n_pop = int(self.soga_pop.get())
@@ -911,8 +910,8 @@ class OWFLOGui(ctk.CTk):
             max_turbs = int(self.farm_max_turb.get())
             min_turbs = int(self.farm_min_turb.get())
             workability = float(self.farm_work.get())
-            
-            
+
+
         except ValueError:
             self.log("🔴 ERROR: Please ensure all SOGA parameters are valid numbers.")
             self.btn_run_soga.configure(state="normal")
@@ -921,7 +920,7 @@ class OWFLOGui(ctk.CTk):
         def worker():
             self.log("--- Preparing SOGA Environment ---")
             os.makedirs('./inputs', exist_ok=True)
-            
+
             # 2. Write the config.inp file using the unified method
             self.opt_mode_var.set("SOGA") # Force mode to SOGA
             try:
@@ -937,7 +936,7 @@ class OWFLOGui(ctk.CTk):
 
             exe_name = "soga_optimizer.exe" if sys.platform == "win32" else "./soga_optimizer"
             exe_path = os.path.join(os.getcwd(), 'source', exe_name)
-            
+
             if not os.path.exists(exe_path):
                 self.log(f"🔴 ERROR: {exe_name} not found. Please click Compile SOGA first.")
                 self.after(0, lambda: self.btn_run_soga.configure(state="normal"))
@@ -946,10 +945,10 @@ class OWFLOGui(ctk.CTk):
             try:
                 self.after(0, lambda: self.btn_abort.configure(state="normal"))
                 self.running_process = subprocess.Popen(
-                    [exe_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                    [exe_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1, universal_newlines=True, cwd=os.getcwd()
                 )
-                
+
                 self.detected_height_levels = 0
                 for line in self.running_process.stdout:
                     cleaned = line.strip()
@@ -957,15 +956,15 @@ class OWFLOGui(ctk.CTk):
                     if "unique hub height level(s)" in cleaned:
                         match = re.search(r'(\d+)\s*unique hub height', cleaned)
                         if match: self.detected_height_levels = int(match.group(1))
-                
+
                 self.running_process.wait()
-                
+
                 if self.running_process.returncode == 0:
                     self.log("🎉 SOGA Optimization Finished Successfully!")
                     self.after(0, lambda: self.btn_soga_plot.configure(state="normal"))
                     self.after(0, lambda: self.btn_soga_3d.configure(state="normal"))
                     self.after(0, lambda: self.btn_soga_anim.configure(state="normal"))
-                    
+
                     # Update SOGA dropdown safely
                     max_z = getattr(self, 'detected_height_levels', 0)
                     if max_z > 0:
@@ -974,7 +973,7 @@ class OWFLOGui(ctk.CTk):
                         self.after(0, lambda: self.soga_anim_height_dropdown.set(valid_levels[0]))
                 else:
                     self.log(f"🛑 Process Terminated (Exit code {self.running_process.returncode})")
-                    
+
             except Exception as e:
                 self.log(f"🔴 System Error executing Fortran: {e}")
             finally:
@@ -989,10 +988,10 @@ class OWFLOGui(ctk.CTk):
     def plot_soga_convergence(self):
         target_obj = self.soga_target.get() # Grab the objective name
         out_dir = self.path_out.get()       # Grab the dynamic output path
-        
+
         self.log(f"📈 Generating SOGA Convergence Plot for {target_obj} in {out_dir}...")
         self.btn_soga_plot.configure(state="normal")
-        
+
         def worker():
             # Pass BOTH the dynamic output directory and the target objective
             out_img = visualizer.save_soga_convergence_plot(output_dir=out_dir, target_obj=target_obj)
@@ -1002,7 +1001,7 @@ class OWFLOGui(ctk.CTk):
                     else: subprocess.run(["xdg-open", out_img])
                 except Exception: pass
             self.after(0, lambda: self.btn_soga_plot.configure(state="normal"))
-            
+
         threading.Thread(target=worker, daemon=True).start()
 
     def plot_soga_3d(self):
@@ -1012,15 +1011,15 @@ class OWFLOGui(ctk.CTk):
             z_scale = float(self.soga_z_scale.get())
         except ValueError:
             z_scale = 5.0 # Fallback default
-            
+
         self.log(f"🌐 Launching SOGA 3D Viewer (Z-Scale: {z_scale}x)...")
         self.btn_soga_3d.configure(state="normal")
-        
+
         def worker():
-            try: 
+            try:
                 # Pass the new parameters to visualizer
                 visualizer.generate_soga_3d_layout(target_obj=target_obj, z_scale=z_scale, turb_path=turb_file)
-            except Exception as e: 
+            except Exception as e:
                 self.log(f"🔴 Error in 3D viewer: {e}")
             self.after(0, lambda: self.btn_soga_3d.configure(state="normal"))
         threading.Thread(target=worker, daemon=True).start()
@@ -1036,17 +1035,17 @@ class OWFLOGui(ctk.CTk):
             user_fps = int(self.soga_anim_fps.get())
         except ValueError:
             user_step, user_fps = 1, 10 # Fallbacks
-            
+
         self.log(f"🎬 Generating SOGA MP4 animation for {selected} (Step: {user_step}, FPS: {user_fps})...")
         self.btn_soga_anim.configure(state="normal")
-        
+
         def worker():
             try:
                 # Assuming visualizer.generate_soga_mp4_animation was updated similarly to accept these
                 out_mp4 = visualizer.generate_soga_mp4_animation(
-                    file_path=os.path.join(out_dir, 'animation_data_soga.csv'), 
-                    level_idx=level_idx, 
-                    frame_step=user_step, 
+                    file_path=os.path.join(out_dir, 'animation_data_soga.csv'),
+                    level_idx=level_idx,
+                    frame_step=user_step,
                     fps=user_fps
                 )
                 if out_mp4:
@@ -1059,7 +1058,7 @@ class OWFLOGui(ctk.CTk):
 
     def run_moga_pipeline(self):
         self.btn_run_moga.configure(state="disabled")
-        
+
         # 1. Harvest inputs from the UI
         try:
             it_max = int(self.moga_gen.get())
@@ -1067,7 +1066,7 @@ class OWFLOGui(ctk.CTk):
             p_cross = float(self.moga_cross.get())
             p_mut = float(self.moga_mut.get())
             mu = float(self.moga_mu.get())
-            
+
             # Grabbing shared constraints from Tab 2!
             max_turbs = int(self.farm_max_turb.get())
             min_turbs = int(self.farm_min_turb.get())
@@ -1080,7 +1079,7 @@ class OWFLOGui(ctk.CTk):
         def worker():
             self.log("--- Preparing NSGA-II Environment ---")
             os.makedirs('./inputs', exist_ok=True)
-            
+
             # 2. Write the config.inp file using the unified method
             self.opt_mode_var.set("MOGA") # Force mode to MOGA
             try:
@@ -1096,12 +1095,12 @@ class OWFLOGui(ctk.CTk):
 
             # 3. Execute Fortran Executable and stream output LIVE
             import subprocess
-            
+
             # Determine platform-specific binary name
             # Determine platform-specific binary name
             exe_name = "moga_optimizer.exe" if sys.platform == "win32" else "./moga_optimizer"
             exe_path = os.path.join(os.getcwd(), 'source', exe_name)
-            
+
             if not os.path.exists(exe_path):
                 self.log(f"🔴 ERROR: Compiled optimizer ({exe_name}) not found in /source folder.")
                 self.after(0, lambda: self.btn_run_moga.configure(state="normal"))
@@ -1113,46 +1112,46 @@ class OWFLOGui(ctk.CTk):
 
                 # 2. Assign the process to the class variable so abort_process() can see it
                 self.running_process = subprocess.Popen(
-                    [exe_path], 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.STDOUT, 
+                    [exe_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     text=True,
-                    bufsize=1, 
+                    bufsize=1,
                     universal_newlines=True,
                     cwd=os.getcwd()
                 )
-                
+
                 self.detected_height_levels = 0  # Reset before running
 
                 # 3. Stream the output and intercept metadata
                 for line in self.running_process.stdout:
                     cleaned_line = line.strip()
                     self.log(cleaned_line)
-                    
+
                     # Intercept the height level count dynamically!
                     if "unique hub height level(s)" in cleaned_line:
                         match = re.search(r'(\d+)\s*unique hub height', cleaned_line)
                         if match:
                             self.detected_height_levels = int(match.group(1))
-                
+
                 self.running_process.wait()
-                
+
                 if self.running_process.returncode == 0:
                     self.log("🎉 NSGA-II Optimization Finished Successfully!")
-                    
+
                     # 1. Unlock the plot buttons
                     self.after(0, lambda: self.btn_moga_pareto.configure(state="normal"))
                     self.after(0, lambda: self.btn_moga_3d.configure(state="normal"))
                     self.after(0, lambda: self.btn_moga_anim.configure(state="normal"))
-                    
+
                     # 2. Dynamically find the max height level and update the dropdown
                     self.update_animation_dropdown()
                 else:
                     self.log(f"🛑 Process Terminated (Exit code {self.running_process.returncode})")
-                    
+
             except Exception as e:
                 self.log(f"🔴 System Error executing Fortran: {e}")
-                
+
             finally:
                 # 5. Cleanup: Disconnect the process and disable the abort button
                 self.running_process = None
@@ -1173,15 +1172,15 @@ class OWFLOGui(ctk.CTk):
 
         def worker():
             self.log(f"--- Starting Fortran Compilation ({mode.upper()} | {target.upper()}) ---")
-            
+
             # Automatically set the correct binary extension based on the OS
             exe_name = f"{target}_optimizer.exe" if sys.platform == "win32" else f"{target}_optimizer"
-            
+
             # Define exact paths to the core library and the specific main script
             out_path = os.path.join(".", "source", exe_name)
-            core_path = os.path.join(".", "source", "wflop_core.f90") 
+            core_path = os.path.join(".", "source", "wflop_core.f90")
             main_path = os.path.join(".", "source", f"main_{target}.f90")
-            
+
             # Define gfortran flags
             if mode == "debug":
                 flags = ["-Wall", "-Wextra", "-g", "-O0", "-fcheck=all", "-fbacktrace", "-fopenmp"]
@@ -1198,17 +1197,17 @@ class OWFLOGui(ctk.CTk):
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1, universal_newlines=True, cwd=os.getcwd()
                 )
-                
+
                 for line in process.stdout:
                     self.log(f"Compiler: {line.strip()}")
-                    
+
                 process.wait()
-                
+
                 if process.returncode == 0:
                     self.log(f"✅ Compilation Successful! Executable saved as: {exe_name}")
                 else:
                     self.log(f"🔴 Compilation FAILED with exit code {process.returncode}")
-                    
+
             except FileNotFoundError:
                 self.log("🔴 ERROR: 'gfortran' command not found. Ensure MinGW is in your system PATH.")
             except Exception as e:
@@ -1230,17 +1229,17 @@ class OWFLOGui(ctk.CTk):
         out_dir = self.path_out.get() # Grab the dynamic output path
         self.log(f"📊 Generating Pareto Front plots in {out_dir}...")
         self.btn_moga_pareto.configure(state="normal")
-        
+
         def worker():
             # Pass the dynamic output directory to the visualizer
             success = visualizer.save_pareto_plots(output_dir=out_dir)
             if success:
                 self.log(f"✅ Pareto plots saved to {out_dir}")
-                
+
                 # --- Auto-open BOTH images using dynamic paths ---
                 img1_path = os.path.join(out_dir, "plot_final_pareto.png")
                 img2_path = os.path.join(out_dir, "plot_evolution.png")
-                
+
                 try:
                     if sys.platform == "win32":
                         os.startfile(os.path.normpath(img1_path))
@@ -1251,9 +1250,9 @@ class OWFLOGui(ctk.CTk):
                         subprocess.run(["xdg-open", img2_path])
                 except Exception:
                     pass
-                    
+
             self.after(0, lambda: self.btn_moga_pareto.configure(state="normal"))
-            
+
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1263,17 +1262,17 @@ class OWFLOGui(ctk.CTk):
             z_scale = float(self.moga_z_scale.get())
         except ValueError:
             z_scale = 5.0
-            
+
         self.log(f"🌐 Launching 3D Viewer (Z-Scale: {z_scale}x)...")
         self.btn_moga_3d.configure(state="normal")
-        
+
         def worker():
             try:
                 visualizer.generate_3d_comparison(z_scale=z_scale, turb_path=turb_file)
             except Exception as e:
                 self.log(f"🔴 Error in 3D viewer: {e}")
             self.after(0, lambda: self.btn_moga_3d.configure(state="normal"))
-            
+
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1282,11 +1281,11 @@ class OWFLOGui(ctk.CTk):
         if "Level" not in selected_height: return
         level_idx = int(selected_height.replace("Level ", ""))
         out_dir = self.path_out.get() # Dynamic output path
-        
+
         # Determine which file to read based on the dropdown
         selected_layout = self.moga_anim_layout.get()
         obj_num = "1" if "Obj 1" in selected_layout else "2"
-        
+
         try:
             user_step = int(self.moga_anim_step.get())
             user_fps = int(self.moga_anim_fps.get())
@@ -1295,17 +1294,17 @@ class OWFLOGui(ctk.CTk):
 
         self.log(f"🎬 Generating MP4 animation for {selected_layout} at {selected_height} (Step: {user_step}, FPS: {user_fps})...")
         self.btn_moga_anim.configure(state="disabled")
-        
+
         def worker():
             try:
                 # Dynamically construct the file path based on objective choice
                 data_path = os.path.join(out_dir, f'animation_data_obj_{obj_num}.csv')
-                
+
                 out_mp4 = visualizer.generate_mp4_animation(
-                    file_path=data_path, 
-                    level_idx=level_idx, 
-                    fast_mode=False, 
-                    frame_step=user_step, 
+                    file_path=data_path,
+                    level_idx=level_idx,
+                    fast_mode=False,
+                    frame_step=user_step,
                     fps=user_fps
                 )
                 if out_mp4:
@@ -1315,14 +1314,14 @@ class OWFLOGui(ctk.CTk):
             except Exception as e:
                 self.log(f"🔴 Error generating animation: {e}")
             self.after(0, lambda: self.btn_moga_anim.configure(state="normal"))
-            
+
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
     def update_animation_dropdown(self):
         """Builds the dropdown based on what Fortran actually reported."""
         max_z_levels = getattr(self, 'detected_height_levels', 0)
-        
+
         if max_z_levels > 0:
             valid_levels = [f"Level {i}" for i in range(1, max_z_levels + 1)]
             self.after(0, lambda: self.anim_height_dropdown.configure(values=valid_levels, state="normal"))
@@ -1360,13 +1359,13 @@ class OWFLOGui(ctk.CTk):
 
     def generate_config_file(self, it_max, n_pop, p_cross, p_mut, mu, max_turbs, min_turbs, workability, soga_stall=0):
         """Writes the config.inp file before launching Fortran."""
-        
+
         # Determine Opt Mode
         opt_mode_int = 1 if self.opt_mode_var.get() == "SOGA" else 2
-        
+
         # Get mapped integer values
         obj1_int = OBJ_MAPPING[self.obj1_var.get()]
-        
+
         # If SOGA, obj2 doesn't matter, we write 0. If MOGA, get the real value.
         obj2_int = 0 if opt_mode_int == 1 else OBJ_MAPPING[self.obj2_var.get()]
         wind_mode_int = 1 if self.wind_calc_mode.get() == "Time-Series" else 2
@@ -1445,7 +1444,7 @@ class OWFLOGui(ctk.CTk):
         else:
             self.log("🔴 ERROR: Failed to decode target distribution profile parameters.")
     # =====================================================================
-        
+
     def run_wind_pipeline(self):
         if not self.era5_dir:
             self.log("ERROR: Please select a directory containing ERA5 .nc files first.")
@@ -1467,14 +1466,14 @@ class OWFLOGui(ctk.CTk):
         }
         def worker():
             self.log(f"--- Starting Wind Data Generation ({filters['mode']}) ---")
-            
+
             # Pass BOTH the directory and the extended filters to your backend
             wind_generator.process_wind_data(
-                self.era5_dir, 
-                filters, 
+                self.era5_dir,
+                filters,
                 output_callback=self.log
             )
-            
+
             self.log("--- Wind Pipeline Complete ---")
             self.after(0, lambda: self.btn_run_wind.configure(state="normal"))
 

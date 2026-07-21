@@ -1,0 +1,17 @@
+[project]
+name = "wflop"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "customtkinter>=6.0.0",
+    "ffmpeg>=1.4",
+    "fortls>=3.2.2",
+    "hypothesis>=6.0.0",
+    "matplotlib>=3.11.0",
+    "pandas>=3.0.3",
+    "pyproj>=3.7.2",
+    "pytest>=9.1.1",
+    "pyvista>=0.48.4",
+    "scipy>=1.18.0",
+    "xarray>=2026.7.0",
+]
