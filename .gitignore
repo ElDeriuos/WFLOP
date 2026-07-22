@@ -28,3 +28,9 @@ source/.vscode/
 source/__pycache__/
 
 tests/
+inputs/farm_bathymetry.dat
+inputs/farm_bathymetry.dat
+inputs/filtered_wind.txt
+inputs/mesh_metadata.json
+inputs/raw_bathymetry/gebco_2024_n30.6_s23.5_w47.0_e57.0.asc
+inputs/Turbines/IEA-15-240-RWT_tabular.xlsx
