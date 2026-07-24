@@ -8,6 +8,7 @@ dependencies = [
     "fortls>=3.2.2",
     "hypothesis>=6.0.0",
     "matplotlib>=3.11.0",
+    "netcdf4>=1.7.4",
     "pandas>=3.0.3",
     "pyproj>=3.7.2",
     "pytest>=9.1.1",

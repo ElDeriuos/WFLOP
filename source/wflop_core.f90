@@ -387,26 +387,18 @@ CONTAINS
             ! 4. Parse the Time Series Data
             ! --------------------------------------------------------------
             DO t_step = 1, site%nsteps
-                ! Your Python script writes the time step index first (e.g., "     1")
                 READ(f_unit, *) dummy_int
 
                 DO i = 1, site%n_nodes
-                    ! Read the U and V components for this specific node
                     READ(f_unit, *) u_val, v_val
 
-                    ! Calculate wind speed magnitude
                     ws_mag = SQRT((u_val**2) + (v_val**2))
 
-                    ! Calculate wind direction (Meteorological convention from North)
-                    wd_rad = ATAN2(u_val, v_val)
-                    IF (wd_rad < 0.0_wp) wd_rad = wd_rad + (2.0_wp * PI)
-
-                    ! Convert from North-origin clockwise to East-origin CCW for solver consistency
-                    wd_rad = (PI / 2.0_wp) - wd_rad
+                    ! Direct Cartesian flow vector angle (TOWARDS flow direction, CCW from +x East)
+                    wd_rad = ATAN2(v_val, u_val)
                     IF (wd_rad < 0.0_wp) wd_rad = wd_rad + (2.0_wp * PI)
                     site%wd0_ts(i, t_step) = wd_rad
 
-                    ! Power Law
                     DO j = 1, site%n_hlevel
                         site%ws0_ts(i, j, t_step) = ws_mag * ((site%h_level(j) / 10.0_wp) ** alpha)
                     END DO
@@ -444,7 +436,10 @@ CONTAINS
     END SUBROUTINE load_site_data
     ! ==================================================================
     ! PRIVATE HELPER ROUTINES
-    ! Converts meteorological direction (FROM which wind blows) to flow vector (TOWARDS which flow travels)
+    ! ==================================================================
+    ! SUBROUTINE: load_wind_rose_data
+    ! Converts Meteorological Direction (FROM which wind blows)
+    ! into Cartesian Flow Angle rad (TOWARDS which flow travels, CCW from +x East)
     ! ==================================================================
     SUBROUTINE load_wind_rose_data(filename, site)
         CHARACTER(LEN=*), INTENT(IN)    :: filename
@@ -478,7 +473,12 @@ CONTAINS
         DO i = 1, site%n_rose_states
             READ(f_unit, *, IOSTAT=ios) site%rose_wd_deg(i), site%rose_ws_10m(i), site%rose_prob(i)
 
-            ! Transformation: Convert Met deg (FROM) to Cartesian flow vector angle rad (TOWARDS)
+            IF (ios /= 0) THEN
+                PRINT *, "ERROR: Failed reading wind-rose state ", i
+                STOP 1
+            END IF
+
+            ! Transformation: Met deg (FROM) -> Cartesian flow vector rad (TOWARDS)
             ! phi = (270 - deg) in radians = (1.5 * PI) - (deg * PI / 180)
             site%rose_wd_rad(i) = (1.5_wp * PI) - (site%rose_wd_deg(i) * PI / 180.0_wp)
 
@@ -501,12 +501,10 @@ CONTAINS
 
         IF (ABS(prob_sum - 1.0_wp) > 1.0E-3_wp) THEN
             PRINT *, " WARNING: Wind-rose probability sum = ", prob_sum
-            PRINT *, " Expected approximately 1.0. Check bin filtering/tolerance."
         END IF
 
         PRINT *, " Loaded wind-rose states: ", site%n_rose_states
     END SUBROUTINE load_wind_rose_data
-
     SUBROUTINE read_turbine_curve(filepath, t_spec)
         CHARACTER(LEN=*),  INTENT(IN)    :: filepath
         TYPE(TurbineSpec), INTENT(INOUT) :: t_spec
