@@ -19,6 +19,37 @@ The OWFLO ecosystem uses a **"Library + Driver"** architecture to maintain high 
 
 ---
 
+## 🧪 Time-Series Simulation
+
+`run_simulator` validates optimizer layouts against the original hourly wind time series. It accepts both existing optimizer result formats:
+
+- SOGA: `soga_best_layout.csv`, one data row with `fitness,...,gene_1,...,gene_n`.
+- MOGA: `final_pareto_front.csv`, one data row per Pareto solution with `LCOE,...,gene_1,...,gene_n`.
+
+The simulator reads only `gene_1` through `gene_n`; metadata columns are ignored. Genes are in mesh row order. Gene `1` means no turbine. Genes `2` through `n_types-1` select turbine profiles from `turbine_spec.txt`. Existing CSV coordinates are not required by the parser and are not validated.
+
+Build and run:
+
+```bash
+make simulator
+./build/run_simulator inputs/config.inp outputs/final_pareto_front.csv 1,4,7
+# Use `all` to simulate every data row; omitting the selector also simulates all rows.
+./build/run_simulator inputs/config.inp outputs/soga_best_layout.csv all
+```
+
+Selector row numbers are 1-based data-row numbers after the CSV header. `solution_id` is the position within the selected list; `source_row` preserves the original CSV data-row number.
+
+The simulator forces `wind_mode=1` while retaining paths and physics settings from `config.inp`. It recalculates cost and time-series physics using the existing wake solver, AEP, and fatigue routines. It does not calculate electrical array output. Outputs are written under `config%out_dir`:
+
+- `simulation_farm_timeseries.csv`: `solution_id,source_row,timestep,total_power_mw,total_capacity_factor`.
+- `simulation_summary.csv`: aggregate power, installed capacity, annual energy (`annual_energy_gwh`), capacity factor, wake-loss percentage, recalculated cost/LCOE, AEP, and fatigue.
+- `simulation_turbines.csv`: one aggregate row per installed turbine with node, type, mean/max/total power, mean effective/reference wind power, mean turbulence intensity, mean Ct, and mean thrust force in N. No per-turbine time-series file is produced.
+- `simulation_summary.json`: JSON equivalent of aggregate solution summaries.
+
+Power is reported in MW, energy in MWh/GWh, wind speed in m/s, and direction remains the existing radians/towards-flow convention. AEP follows the existing optimizer convention: hourly time-series mean power annualized to 8760 hours. Invalid rows are skipped with warnings and partial output files remain available. Wake non-convergence emits a warning and uses the last iteration, as requested.
+
+---
+
 ## 🧩 Fortran Backend Modules (`wflop_core.f90`)
 
 The mathematical heavy lifting is divided into highly modularized Fortran namespaces.
