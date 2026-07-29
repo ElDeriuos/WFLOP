@@ -1074,13 +1074,29 @@ CONTAINS
     ! ==================================================================
     ! SUBROUTINE: evaluate_physics (Wake + Power + Fatigue)
     ! ==================================================================
-    SUBROUTINE evaluate_physics(ind, site, turbines, config)
+    SUBROUTINE evaluate_physics(ind, site, turbines, config, farm_power_ts, farm_capacity_factor_ts, &
+                                turbine_mean_power, turbine_max_power, turbine_total_power, &
+                                turbine_effective_speed_ts, turbine_wake_free_power_ts, &
+                                turbine_mean_ti, turbine_mean_ct, turbine_mean_thrust)
         TYPE(Individual),  INTENT(INOUT) :: ind
         TYPE(SiteData),    INTENT(IN)    :: site
         TYPE(TurbineSpec), INTENT(IN)    :: turbines(:)
         TYPE(ConfigData),  INTENT(IN)    :: config
+        REAL(wp), OPTIONAL, INTENT(OUT) :: farm_power_ts(:)
+        REAL(wp), OPTIONAL, INTENT(OUT) :: farm_capacity_factor_ts(:)
+        REAL(wp), OPTIONAL, INTENT(OUT) :: turbine_mean_power(:)
+        REAL(wp), OPTIONAL, INTENT(OUT) :: turbine_max_power(:)
+        REAL(wp), OPTIONAL, INTENT(OUT) :: turbine_total_power(:)
+        REAL(wp), OPTIONAL, INTENT(OUT) :: turbine_effective_speed_ts(:,:)
+        REAL(wp), OPTIONAL, INTENT(OUT) :: turbine_wake_free_power_ts(:,:)
+        REAL(wp), OPTIONAL, INTENT(OUT) :: turbine_mean_ti(:)
+        REAL(wp), OPTIONAL, INTENT(OUT) :: turbine_mean_ct(:)
+        REAL(wp), OPTIONAL, INTENT(OUT) :: turbine_mean_thrust(:)
 
         INTEGER :: n_turb, i, m, t_step, t_type, n_idx, k_iter
+        LOGICAL :: converged
+        REAL(wp) :: total_capacity_mw, turbine_power_mw, ambient_power_mw
+        REAL(wp) :: turbine_ct, turbine_thrust
         REAL(wp) :: total_aep, tep_farm, v_local, i_local, cp_val, area, m_ct
         REAL(wp) :: p_env, v_ambient, N_local, N_ref
         REAL(wp) :: avg_norm_life, min_norm_life
@@ -1096,7 +1112,20 @@ CONTAINS
         REAL(wp), ALLOCATABLE :: norm_fatigue_life(:) ! N_i,OPT / N_i,ORI
 
         n_turb = COUNT(ind%chromosome > 1)
-        IF (n_turb == 0) RETURN
+
+        IF (PRESENT(farm_power_ts)) farm_power_ts = 0.0_wp
+        IF (PRESENT(farm_capacity_factor_ts)) farm_capacity_factor_ts = 0.0_wp
+        IF (PRESENT(turbine_mean_power)) turbine_mean_power = 0.0_wp
+        IF (PRESENT(turbine_max_power)) turbine_max_power = 0.0_wp
+        IF (PRESENT(turbine_total_power)) turbine_total_power = 0.0_wp
+        IF (PRESENT(turbine_mean_ti)) turbine_mean_ti = 0.0_wp
+        IF (PRESENT(turbine_mean_ct)) turbine_mean_ct = 0.0_wp
+        IF (PRESENT(turbine_mean_thrust)) turbine_mean_thrust = 0.0_wp
+        IF (n_turb == 0) THEN
+            ind%raw_aep = 0.0_wp
+            ind%raw_fatigue = 0.0_wp
+            RETURN
+        END IF
 
         ALLOCATE(node_idx(n_turb), type_turb(n_turb), h_idx(n_turb))
         ALLOCATE(ws_new(n_turb), ws_old(n_turb), ti_new(n_turb))
@@ -1121,6 +1150,12 @@ CONTAINS
         END DO
 
         total_aep = 0.0_wp
+        total_capacity_mw = 0.0_wp
+        DO m = 1, n_turb
+            total_capacity_mw = total_capacity_mw + turbines(type_turb(m))%rated_power
+        END DO
+        IF (PRESENT(turbine_effective_speed_ts)) turbine_effective_speed_ts = 0.0_wp
+        IF (PRESENT(turbine_wake_free_power_ts)) turbine_wake_free_power_ts = 0.0_wp
 
         ! --------------------------------------------------------------
         ! MAIN TIME-STEP LOOP (Hourly Data)
@@ -1138,6 +1173,7 @@ CONTAINS
             ! ----------------------------------------------------------
             ! ALL-TO-ALL ITERATIVE WAKE SOLVER (Velocity & Turbulence)
             ! ----------------------------------------------------------
+            converged = .FALSE.
             DO k_iter = 1, config%max_iter
                 ws_old = ws_new
                 wake_deficit_u = 0.0_wp
@@ -1180,8 +1216,12 @@ CONTAINS
                 END DO
 
                 ! Convergence Check
-                IF (MAXVAL(ABS(ws_new - ws_old)) < 1.0E-4_wp) EXIT
+                IF (MAXVAL(ABS(ws_new - ws_old)) < 1.0E-4_wp) THEN
+                    converged = .TRUE.
+                    EXIT
+                END IF
             END DO
+            IF (.NOT. converged) PRINT *, 'WARNING: wake solver reached max_iter at timestep ', t_step, '; using last iteration.'
 
             ! ----------------------------------------------------------
             ! Calculate POWER & FATIGUE using converged local speeds
@@ -1198,6 +1238,20 @@ CONTAINS
                                    turbines(t_type)%cp_ref, turbines(t_type)%n_points)
                 area = pi * (turbines(t_type)%rotor_diameter / 2.0_wp)**2
                 tep_farm = tep_farm + (0.5_wp * rho * area * (v_local**3) * cp_val)
+
+                turbine_power_mw = (0.5_wp * rho * area * (v_local**3) * cp_val) / 1.0E6_wp
+                ambient_power_mw = (0.5_wp * rho * area * (MAX(0.0_wp, v_ambient)**3) * &
+                                    get_coeff(MAX(0.0_wp, v_ambient), turbines(t_type)%v_ref, &
+                                              turbines(t_type)%cp_ref, turbines(t_type)%n_points)) / 1.0E6_wp
+                IF (PRESENT(turbine_effective_speed_ts)) turbine_effective_speed_ts(m, t_step) = v_local
+                IF (PRESENT(turbine_wake_free_power_ts)) turbine_wake_free_power_ts(m, t_step) = ambient_power_mw
+                IF (PRESENT(turbine_total_power)) turbine_total_power(m) = turbine_total_power(m) + turbine_power_mw
+                IF (PRESENT(turbine_max_power)) turbine_max_power(m) = MAX(turbine_max_power(m), turbine_power_mw)
+                turbine_ct = get_coeff(v_local, turbines(t_type)%v_ref, turbines(t_type)%ct_ref, turbines(t_type)%n_points)
+                turbine_thrust = 0.5_wp * rho * area * (v_local**2) * turbine_ct
+                IF (PRESENT(turbine_mean_ti)) turbine_mean_ti(m) = turbine_mean_ti(m) + i_local
+                IF (PRESENT(turbine_mean_ct)) turbine_mean_ct(m) = turbine_mean_ct(m) + turbine_ct
+                IF (PRESENT(turbine_mean_thrust)) turbine_mean_thrust(m) = turbine_mean_thrust(m) + turbine_thrust
 
                 ! --- 2. YANG 2025 FATIGUE LIFE CYCLES ---
                 ! Local/wake-affected operational fatigue life, N_i,OPT.
@@ -1217,7 +1271,26 @@ CONTAINS
             END DO
 
             total_aep = total_aep + (tep_farm * p_env)
+            IF (PRESENT(farm_power_ts)) farm_power_ts(t_step) = tep_farm / 1.0E6_wp
+            IF (PRESENT(farm_capacity_factor_ts)) THEN
+                IF (total_capacity_mw > 0.0_wp) THEN
+                    farm_capacity_factor_ts(t_step) = (tep_farm / 1.0E6_wp) / total_capacity_mw
+                ELSE
+                    farm_capacity_factor_ts(t_step) = 0.0_wp
+                END IF
+            END IF
         END DO
+
+        IF (PRESENT(turbine_mean_power)) THEN
+            IF (PRESENT(turbine_total_power)) THEN
+                turbine_mean_power = turbine_total_power / REAL(site%nsteps, wp)
+            ELSE
+                turbine_mean_power = 0.0_wp
+            END IF
+        END IF
+        IF (PRESENT(turbine_mean_ti)) turbine_mean_ti = turbine_mean_ti / REAL(site%nsteps, wp)
+        IF (PRESENT(turbine_mean_ct)) turbine_mean_ct = turbine_mean_ct / REAL(site%nsteps, wp)
+        IF (PRESENT(turbine_mean_thrust)) turbine_mean_thrust = turbine_mean_thrust / REAL(site%nsteps, wp)
 
         ! Post-process AEP
         total_aep = total_aep * 8760.0_wp / 1.0E9_wp ! Convert to GWh
