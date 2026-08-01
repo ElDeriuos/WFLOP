@@ -60,9 +60,9 @@ CONTAINS
         OPEN(NEWUNIT=f_summary, FILE=TRIM(config%out_dir)//'simulation_summary.csv', STATUS='REPLACE')
         OPEN(NEWUNIT=f_turbines, FILE=TRIM(config%out_dir)//'simulation_turbines.csv', STATUS='REPLACE')
         OPEN(NEWUNIT=f_json, FILE=TRIM(config%out_dir)//'simulation_summary.json', STATUS='REPLACE')
-        WRITE(f_ts,'(A)') 'solution_id,source_row,timestep,total_power_mw,total_capacity_factor'
-        WRITE(f_summary,'(A)') 'solution_id,source_row,installed_turbines,installed_capacity_mw,mean_power_mw,max_power_mw,annual_energy_gwh,capacity_factor,wake_loss_percent,raw_cost,raw_aep_gwh,raw_fatigue,lcoe'
-        WRITE(f_turbines,'(A)') 'solution_id,source_row,turbine_index,node_id,turbine_type,mean_power_mw,max_power_mw,total_power_mwh,mean_effective_speed_ms,mean_wake_free_power_mw,mean_turbulence_intensity,mean_ct,mean_thrust_n'
+        WRITE(f_ts,'(A)') 'solution_id,source_row,timestep,total_power_kw,total_capacity_factor'
+        WRITE(f_summary,'(A)') 'solution_id,source_row,installed_turbines,installed_capacity_mw,mean_power_kw,max_power_kw,annual_energy_gwh,capacity_factor,wake_loss_percent,raw_cost,raw_aep_gwh,raw_fatigue,lcoe'
+        WRITE(f_turbines,'(A)') 'solution_id,source_row,turbine_index,node_id,turbine_type,mean_power_kw,max_power_kw,total_power_kwh,mean_effective_speed_ms,mean_wake_free_power_kw,mean_turbulence_intensity,mean_ct,mean_thrust_n'
         WRITE(f_json,'(A)') '['
         first_output = .TRUE.
         row_number = 0
@@ -208,7 +208,7 @@ CONTAINS
         IF (.NOT. first) WRITE(unit,'(A)') ','
         WRITE(unit,'(A,I0,A,I0,A,I0,A,ES16.8,A,ES16.8,A,ES16.8,A,ES16.8,A,ES16.8,A,ES16.8,A,ES16.8,A,ES16.8,A,ES16.8,A,ES16.8,A)') &
             '  {"solution_id":', solution_id, ',"source_row":', source_row, ',"installed_turbines":', n_turb, &
-            ',"installed_capacity_mw":', capacity, ',"mean_power_mw":', mean_p, ',"max_power_mw":', max_p, &
+            ',"installed_capacity_mw":', capacity, ',"mean_power_kw":', mean_p, ',"max_power_kw":', max_p, &
             ',"annual_energy_gwh":', annual_e, ',"capacity_factor":', cf, ',"wake_loss_percent":', wake, &
             ',"raw_cost":', cost, ',"raw_aep_gwh":', aep, ',"raw_fatigue":', fatigue, ',"lcoe":', lcoe, '}'
     END SUBROUTINE write_json_solution

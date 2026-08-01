@@ -3,7 +3,11 @@ import json
 import pandas as pd
 import numpy as np
 import matplotlib
-# matplotlib.use('Agg') 
+
+# All Matplotlib output in this module is written to files.  The GUI actions
+# call these functions from worker threads, so an interactive backend can
+# attempt to create a window outside the main thread and crash the process.
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.tri import Triangulation
@@ -596,17 +600,29 @@ def save_soga_convergence_plot(output_dir='./outputs', target_obj="Cost"):
     return out_img
 
 
-def generate_soga_3d_layout(target_obj="Cost", z_scale=5.0, turb_path=None):
-    if not os.path.exists('./outputs/soga_best_layout.csv'): return
+def generate_soga_3d_layout(target_obj="Cost", z_scale=5.0, turb_path=None, output_dir='./outputs'):
+    """Display the SOGA champion using files from the selected output directory."""
+    layout_file = os.path.join(output_dir, 'soga_best_layout.csv')
+    if not os.path.exists(layout_file):
+        print(f"Error: {layout_file} not found. Run SOGA optimizer first.")
+        return
     nodes_xyz = _read_mesh_and_bathymetry()
-    df_best = pd.read_csv('./outputs/soga_best_layout.csv')
+    df_best = pd.read_csv(layout_file)
     gene_cols = [c for c in df_best.columns if 'gene' in c.lower()]
     genes = df_best.iloc[0][gene_cols].astype(int).values
     fitness_val = abs(df_best.iloc[0]['fitness']) if ("AEP" in target_obj.upper() or "FATIGUE" in target_obj.upper()) else df_best.iloc[0]['fitness']
+    if 'efficiency_percent' in df_best.columns:
+        efficiency_text = f" | Efficiency: {df_best.iloc[0]['efficiency_percent']:.2f}%"
+    else:
+        efficiency_text = " | Efficiency: unavailable"
     
     plotter = pv.Plotter(shape=(1, 1), window_size=[900, 700]) 
     plotter.set_background('white') # Changed to white for better professional contrast
-    _plot_farm_solution(plotter, 0, f"SOGA Champion ({target_obj}: {fitness_val:,.2f})", nodes_xyz, genes, z_scale, turb_path)
+    _plot_farm_solution(
+        plotter, 0,
+        f"SOGA Champion ({target_obj}: {fitness_val:,.2f}){efficiency_text}",
+        nodes_xyz, genes, z_scale, turb_path
+    )
     plotter.show()
 
 def generate_soga_mp4_animation(file_path='./outputs/animation_data_soga.csv', level_idx=1, frame_step=1, fps=10):
@@ -632,8 +648,13 @@ def generate_soga_mp4_animation(file_path='./outputs/animation_data_soga.csv', l
     df_anim = df_anim[df_anim['time'].isin(times)]
     print(f"Rendering {len(times)} frames at {fps} FPS (Step: {frame_step})...")
 
-    # Extract layout from SOGA best layout file
-    df_best = pd.read_csv('./outputs/soga_best_layout.csv')
+    # Extract layout from the same output directory as the animation data.
+    output_dir = os.path.dirname(os.path.abspath(file_path))
+    layout_file = os.path.join(output_dir, 'soga_best_layout.csv')
+    if not os.path.exists(layout_file):
+        print(f"Error: {layout_file} not found. Run SOGA optimizer first.")
+        return None
+    df_best = pd.read_csv(layout_file)
     genes = df_best.iloc[0][[c for c in df_best.columns if 'gene' in c.lower()]].astype(int).values
 
     t0_data = df_anim[df_anim['time'] == times[0]].copy().reset_index(drop=True)

@@ -232,7 +232,7 @@ CONTAINS
         ! Default
         config%n_obj = 2
         config%max_iter = 10
-        config%farmlifetime = 25
+        config%farmlifetime = 1
         PRINT *, "Configuration loaded successfully."
         ! Safety corrections for soft-constraint parameters
         IF (config%use_soft_constraints /= 0 .AND. config%use_soft_constraints /= 1) THEN
@@ -400,7 +400,7 @@ CONTAINS
                     site%wd0_ts(i, t_step) = wd_rad
 
                     DO j = 1, site%n_hlevel
-                        site%ws0_ts(i, j, t_step) = ws_mag * ((site%h_level(j) / 10.0_wp) ** alpha)
+                        site%ws0_ts(i, j, t_step) = ws_mag * ((site%h_level(j) / 60.0_wp) ** alpha)
                     END DO
                 END DO
             END DO
@@ -491,7 +491,7 @@ CONTAINS
 
             DO j = 1, site%n_hlevel
                 site%rose_ws_hub(j, i) = site%rose_ws_10m(i) * &
-                    ((site%h_level(j) / 10.0_wp) ** alpha)
+                    ((site%h_level(j) / 60.0_wp) ** alpha)
             END DO
 
             prob_sum = prob_sum + site%rose_prob(i)
@@ -692,30 +692,14 @@ CONTAINS
         TYPE(TurbineSpec), INTENT(IN)    :: turbines(:)
         Type(ConfigData),  Intent(In)    :: config
 
-        REAL(wp) :: dcpa_cost, l_ac, l_ec
-        REAL(wp) :: cable_cost, inc_cost
-        INTEGER  :: n_turb, n_ec, n_subs
+        INTEGER :: n_turb
 
-        ! Count active turbines
+        ! Mosetti et al. Eq. (5), reproduced by Grady et al. Eq. (6).
+        ! Cost is dimensionless cost/year for validation, not offshore CAPEX.
+        ! The papers use a one-third volume discount and exp(-0.00174 N^2).
         n_turb = COUNT(ind%chromosome > 1)
-
-        ! ! Penalty for empty layouts >>> Already done in NSGA-II evaluation loop
-        ! IF (n_turb == 0) THEN
-        !     ind%obj_vals(1) = 1.0E9_wp
-        !     RETURN
-        ! END IF
-
-        ! 1. Production & Acquisition Cost
-        dcpa_cost = calc_pa_cost(ind, site, turbines)
-
-        ! 2. Power Transmission Cost (Now also outputs lengths for step 3)
-        CALL calc_cable_cost(ind, site, turbines, cable_cost, l_ac, l_ec, n_ec, n_subs)
-
-        ! 3. Installation & Commissioning Cost
-        inc_cost = calc_install_cost(ind, site, turbines, config, l_ac, l_ec, n_ec, n_subs)
-
-        ! TOTAL CAPEX
-        ind%raw_cost = dcpa_cost + cable_cost + inc_cost
+        ind%raw_cost = REAL(n_turb, wp) * (2.0_wp / 3.0_wp + &
+                         (1.0_wp / 3.0_wp) * EXP(-0.00174_wp * REAL(n_turb ** 2, wp)))
 
     END SUBROUTINE evaluate_financial_cost
 
@@ -1027,7 +1011,9 @@ MODULE physics
     ! ==================================================================
     REAL(wp), PARAMETER :: I_ambient = 0.08_wp       ! Ambient Turbulence Intensity (8%)
     REAL(wp), PARAMETER :: g_v       = 3.7_wp        ! Gust factor (3-s gust)
-    REAL(wp), PARAMETER :: rho       = 1.225_wp      ! Air density (kg/m^3)
+    REAL(wp), PARAMETER :: rho       = 1.2_wp        ! Air density (kg/m^3)
+    ! Simplified power model: power is proportional only to wind speed cubed.
+    REAL(wp), PARAMETER :: POWER_SPEED_COEFF = 0.3_wp
     REAL(wp), PARAMETER :: pi        = 3.141592653589793_wp
 
     ! Structural (Tower Root Approximation for typical 2MW-5MW)
@@ -1095,7 +1081,7 @@ CONTAINS
 
         INTEGER :: n_turb, i, m, t_step, t_type, n_idx, k_iter
         LOGICAL :: converged
-        REAL(wp) :: total_capacity_mw, turbine_power_mw, ambient_power_mw
+        REAL(wp) :: total_capacity_mw, turbine_power_kw, ambient_power_kw
         REAL(wp) :: turbine_ct, turbine_thrust
         REAL(wp) :: total_aep, tep_farm, v_local, i_local, cp_val, area, m_ct
         REAL(wp) :: p_env, v_ambient, N_local, N_ref
@@ -1189,15 +1175,13 @@ CONTAINS
                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
 
                     CALL analytical_wake_sparse(m, n_idx, turbines(t_type), m_ct, site, turbines, config, &
-                                                n_turb, node_idx, type_turb, t_step, ti_new, ws_new, &
-                                                single_deficit_u, single_added_i)
+                                                n_turb, node_idx, type_turb, t_step, single_deficit_u, &
+                                                single_added_i)
 
-                    ! Niayifar & Porté-Agel (2016), Equation 16: Uj = U∞ - Σ(Ui - Uij)
-                    ! Linear summation of normalized velocity deficits
-                    wake_deficit_u = wake_deficit_u + single_deficit_u
-                    ! Maximum turbulence selection (dominant source governs)
-                    ! Transition from squared-sum to MAX-based superposition
-                    wake_added_i_sq = MAX(wake_added_i_sq, single_added_i ** 2)
+                    ! Jensen/Mosetti/Grady: sum kinetic-energy deficits.
+                    ! Store dimensional deficit squared; convert to velocity below.
+                    wake_deficit_u = wake_deficit_u + single_deficit_u ** 2
+                    wake_added_i_sq = 0.0_wp
                 END DO
 
                 ! Apply aggregated wake to local conditions
@@ -1205,10 +1189,10 @@ CONTAINS
                     n_idx = node_idx(m)
                     v_ambient = get_ambient_ws(site, config, n_idx, h_idx(m), t_step)
 
-                    IF (wake_deficit_u(m) < v_ambient) THEN
-                        ws_new(m) = v_ambient - wake_deficit_u(m)
-                        ! Niayifar (2016) Eq. (8): I_local = SQRT(I_0^2 + I_plus^2)
-                        ti_new(m) = SQRT(I_ambient**2 + wake_added_i_sq(m))
+                    IF (wake_deficit_u(m) < 1.0_wp) THEN
+                        ws_new(m) = v_ambient * MAX(0.0_wp, 1.0_wp - SQRT(wake_deficit_u(m)))
+                        ! Jensen/Mosetti/Grady do not model turbulence feedback.
+                        ti_new(m) = I_ambient
                     ELSE
                         ws_new(m) = 0.0_wp
                         ti_new(m) = I_ambient
@@ -1234,19 +1218,20 @@ CONTAINS
                 i_local = ti_new(m)
 
                 ! --- 1. POWER ---
+                ! With one turbine specification, use the requested simplified
+                ! model; wake effects enter only through the local wind speed.
                 cp_val = get_coeff(v_local, turbines(t_type)%v_ref, &
                                    turbines(t_type)%cp_ref, turbines(t_type)%n_points)
                 area = pi * (turbines(t_type)%rotor_diameter / 2.0_wp)**2
-                tep_farm = tep_farm + (0.5_wp * rho * area * (v_local**3) * cp_val)
+                tep_farm = tep_farm + POWER_SPEED_COEFF * (v_local**3)
 
-                turbine_power_mw = (0.5_wp * rho * area * (v_local**3) * cp_val) / 1.0E6_wp
-                ambient_power_mw = (0.5_wp * rho * area * (MAX(0.0_wp, v_ambient)**3) * &
-                                    get_coeff(MAX(0.0_wp, v_ambient), turbines(t_type)%v_ref, &
-                                              turbines(t_type)%cp_ref, turbines(t_type)%n_points)) / 1.0E6_wp
+                ! The simplified formula is defined to return kW directly.
+                turbine_power_kw = POWER_SPEED_COEFF * (v_local**3)
+                ambient_power_kw = POWER_SPEED_COEFF * (MAX(0.0_wp, v_ambient)**3)
                 IF (PRESENT(turbine_effective_speed_ts)) turbine_effective_speed_ts(m, t_step) = v_local
-                IF (PRESENT(turbine_wake_free_power_ts)) turbine_wake_free_power_ts(m, t_step) = ambient_power_mw
-                IF (PRESENT(turbine_total_power)) turbine_total_power(m) = turbine_total_power(m) + turbine_power_mw
-                IF (PRESENT(turbine_max_power)) turbine_max_power(m) = MAX(turbine_max_power(m), turbine_power_mw)
+                IF (PRESENT(turbine_wake_free_power_ts)) turbine_wake_free_power_ts(m, t_step) = ambient_power_kw
+                IF (PRESENT(turbine_total_power)) turbine_total_power(m) = turbine_total_power(m) + turbine_power_kw
+                IF (PRESENT(turbine_max_power)) turbine_max_power(m) = MAX(turbine_max_power(m), turbine_power_kw)
                 turbine_ct = get_coeff(v_local, turbines(t_type)%v_ref, turbines(t_type)%ct_ref, turbines(t_type)%n_points)
                 turbine_thrust = 0.5_wp * rho * area * (v_local**2) * turbine_ct
                 IF (PRESENT(turbine_mean_ti)) turbine_mean_ti(m) = turbine_mean_ti(m) + i_local
@@ -1271,10 +1256,10 @@ CONTAINS
             END DO
 
             total_aep = total_aep + (tep_farm * p_env)
-            IF (PRESENT(farm_power_ts)) farm_power_ts(t_step) = tep_farm / 1.0E6_wp
+            IF (PRESENT(farm_power_ts)) farm_power_ts(t_step) = tep_farm
             IF (PRESENT(farm_capacity_factor_ts)) THEN
                 IF (total_capacity_mw > 0.0_wp) THEN
-                    farm_capacity_factor_ts(t_step) = (tep_farm / 1.0E6_wp) / total_capacity_mw
+                    farm_capacity_factor_ts(t_step) = (tep_farm / 1000.0_wp) / total_capacity_mw
                 ELSE
                     farm_capacity_factor_ts(t_step) = 0.0_wp
                 END IF
@@ -1293,7 +1278,8 @@ CONTAINS
         IF (PRESENT(turbine_mean_thrust)) turbine_mean_thrust = turbine_mean_thrust / REAL(site%nsteps, wp)
 
         ! Post-process AEP
-        total_aep = total_aep * 8760.0_wp / 1.0E9_wp ! Convert to GWh
+        ! total_aep = total_aep * 8760.0_wp / 1.0E9_wp ! Convert to GWh
+        total_aep = total_aep ! Convert to kW
         ind%raw_aep = total_aep
 
         ! Yang normalized fatigue life: N_i,OPT / N_i,ORI.
@@ -1350,7 +1336,7 @@ CONTAINS
     !   added_i(:)   - Wake-added turbulence intensity at each turbine [dimensionless]
     ! ==================================================================
     SUBROUTINE analytical_wake_sparse(m, n_idx, t_spec, m_ct1, site, turbines, config, &
-                                  n_turb, node_idx, type_turb, t_step, ti_new, ws_new, deficit_u, added_i)
+                                  n_turb, node_idx, type_turb, t_step, deficit_u, added_i)
         implicit NONE
         TYPE(SiteData),    INTENT(IN)  :: site
         TYPE(TurbineSpec), INTENT(IN)  :: turbines(:)
@@ -1359,17 +1345,16 @@ CONTAINS
         INTEGER,           INTENT(IN)  :: m, n_idx, n_turb, t_step
         INTEGER,           INTENT(IN)  :: node_idx(:), type_turb(:)
         REAL(wp),          INTENT(IN)  :: m_ct1
-        REAL(wp),          INTENT(IN)  :: ti_new(:), ws_new(:)  ! Local turbulence intensity at each turbine inflow (dimensionless)
         REAL(wp),          INTENT(OUT) :: deficit_u(:), added_i(:)
 
         ! Removed static k_star - now computed dynamically per Niayifar 2016 Eq. 15
 
         REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake, r_rotor
-        REAL(wp) :: dx, dy, x_rot, y_rot, d_center
-        REAL(wp) :: sigma, sigma_d0, a1, b1, c1, c2, z_coord, k_star, m_ct
+        REAL(wp) :: dx, dy, x_rot, y_rot, d_center, a_induction
+        REAL(wp) :: wake_radius, z_coord, m_ct, alpha, deficit_fraction
         INTEGER  :: i, j_node, j_type
-        REAL(wp) :: ti_local, u_inflow, norm_deficit, a_induction
-        REAL(wp) :: r_wake, a_overlap, a_rotor, i_plus_unweighted
+        REAL(wp) :: r_wake, a_overlap, a_rotor
+        REAL(wp) :: r1_expanded
 
         deficit_u = 0.0_wp
         added_i   = 0.0_wp
@@ -1382,14 +1367,9 @@ CONTAINS
         m_ct   = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
         beta   = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
 
-        u_inflow = ws_new(m)
-        ! Extract local turbulence intensity at the wake-producing turbine
-        ti_local = ti_new(m)
-        a_induction = 0.5_wp * (1.0_wp - SQRT(1.0_wp - m_ct))
-
-        ! Niayifar & Porté-Agel (2016), Equation 15
-        ! Wake expansion rate depends on local turbulence intensity
-        k_star = 0.3837_wp * ti_local + 0.003678_wp
+        ! Jensen entrainment coefficient used by Mosetti and Grady:
+        ! alpha = 0.5 / ln(hub height / surface roughness), z0 = 0.3 m.
+        alpha = 0.5_wp / LOG(MAX(t_spec%hub_height / 0.3_wp, 1.000001_wp))
 
         DO i = 1, n_turb
             IF (i == m) CYCLE
@@ -1409,40 +1389,23 @@ CONTAINS
             !IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
             ! Downstream check (strictly downwind: x_rot > 1.0 m)
             IF (x_rot > 1.0_wp) THEN
-                ! Velocity Deficit (Bastankhah Gaussian)
-                sigma_d0 = (k_star * x_rot / d_wake) + (0.2_wp * SQRT(beta))
-                sigma = sigma_d0 * d_wake
-
-                a1 = m_ct / (8.0_wp * (sigma_d0 ** 2))
-                IF (a1 >= 1.0_wp) a1 = 0.999_wp
-
-                b1 = -1.0_wp / (2.0_wp * (sigma_d0 ** 2))
-                c2 = (y_rot / d_wake) ** 2
-
-                j_type  = type_turb(i)
+                ! Jensen top-hat wake: radius grows linearly from rotor radius.
+                wake_radius = d_wake / 2.0_wp + alpha * x_rot
+                j_type = type_turb(i)
                 z_coord = turbines(j_type)%hub_height
-                c1 = ((z_coord - h_wake) / d_wake) ** 2
+                d_center = SQRT(y_rot ** 2 + (z_coord - h_wake) ** 2)
+                IF (d_center <= wake_radius) THEN
+                    ! CT = 4a(1-a); use lower Betz branch for induction a.
+                    a_induction = 0.5_wp * (1.0_wp - SQRT(1.0_wp - m_ct))
 
-                ! Centerline/radial Gaussian velocity deficit fraction
-                norm_deficit = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
+                    ! Expanded rotor radius right behind the disk (r1 = r_r * sqrt((1-a)/(1-2a)))
+                    r1_expanded = (d_wake / 2.0_wp) * SQRT((1.0_wp - a_induction) / &
+                        MAX(1.0E-6_wp, 1.0_wp - 2.0_wp * a_induction))
 
-                ! Dimensional deficit in m/s (Niayifar Eq. 16)
-                deficit_u(i) = u_inflow * norm_deficit
-
-                ! --- Niayifar (2016) Eq. (18) & Eq. (14) Turbulence Area Overlap ---
-                r_wake   = 2.0_wp * sigma                  ! 4*sigma wake diameter => r_wake = 2*sigma
-                r_rotor  = turbines(j_type)%rotor_diameter / 2.0_wp
-                d_center = SQRT((y_rot**2) + ((z_coord - h_wake)**2))
-
-                a_overlap = circle_overlap_area(r_wake, r_rotor, d_center)
-                a_rotor   = pi * (r_rotor**2)
-
-                ! Crespo & Hernández (1996) added turbulence model (Niayifar Eq. 14)
-                i_plus_unweighted = 0.73_wp * (a_induction**0.8325_wp) * &
-                                    (I_ambient**0.0325_wp) * ((x_rot / d_wake)**(-0.32_wp))
-
-                ! Area-weighted added turbulence intensity (Niayifar Eq. 18)
-                added_i(i) = (a_overlap / a_rotor) * i_plus_unweighted
+                    deficit_fraction = 2.0_wp * a_induction / &
+                        (1.0_wp + alpha * x_rot / r1_expanded) ** 2
+                    deficit_u(i) = deficit_fraction
+                END IF
             END IF
         END DO
     END SUBROUTINE analytical_wake_sparse
@@ -1518,16 +1481,15 @@ CONTAINS
                     m_ct = get_coeff(v_local, turbines(t_type)%v_ref, &
                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
 
-                    CALL niayifar_wake_dense(n_idx, turbines(t_type), m_ct, ti_grid(m), v_local, &
-                                             site, config, t_step, single_deficit)
+                    CALL jensen_wake_dense(n_idx, turbines(t_type), m_ct, site, config, t_step, single_deficit)
 
-                    wake_deficit = wake_deficit + single_deficit
+                    wake_deficit = wake_deficit + single_deficit ** 2
                 END DO
 
                 DO i = 1, site%n_nodes
                     DO j = 1, site%n_hlevel
                         v_local = get_ambient_ws(site, config, i, j, t_step)
-                        ws_new(i, j) = MAX(0.0_wp, v_local - wake_deficit(i, j))
+                        ws_new(i, j) = v_local * MAX(0.0_wp, 1.0_wp - SQRT(wake_deficit(i, j)))
                     END DO
                 END DO
 
@@ -1614,18 +1576,18 @@ CONTAINS
     ! SUBROUTINE: niayifar_wake_dense
     ! Dense grid deficit evaluator using Niayifar formulation
     ! ==================================================================
-    SUBROUTINE niayifar_wake_dense(n_idx, t_spec, m_ct1, ti_local, u_inflow, &
-                                    site, config, t_step, deficit)
+    SUBROUTINE jensen_wake_dense(n_idx, t_spec, m_ct1, site, config, t_step, deficit)
         TYPE(SiteData),    INTENT(IN)  :: site
         TYPE(ConfigData),  INTENT(IN)  :: config
         TYPE(TurbineSpec), INTENT(IN)  :: t_spec
         INTEGER,           INTENT(IN)  :: n_idx, t_step
-        REAL(wp),          INTENT(IN)  :: m_ct1, ti_local, u_inflow
+        REAL(wp),          INTENT(IN)  :: m_ct1
         REAL(wp),          INTENT(OUT) :: deficit(:,:)
 
-        REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake
-        REAL(wp) :: dx, dy, x_rot, y_rot
-        REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord, k_star, m_ct
+        REAL(wp) :: hubX, hubY, theta, d_wake, h_wake, alpha
+        REAL(wp) :: dx, dy, x_rot, y_rot, wake_radius, d_center
+        REAL(wp) :: z_coord, m_ct, a_induction, deficit_fraction
+        real(wp) :: r1_expanded
         INTEGER  :: i, j
 
         deficit = 0.0_wp
@@ -1636,9 +1598,7 @@ CONTAINS
         d_wake = t_spec%rotor_diameter
         h_wake = t_spec%hub_height
         m_ct   = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
-        beta   = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
-
-        k_star = 0.3837_wp * ti_local + 0.003678_wp
+        alpha = 0.5_wp / LOG(MAX(t_spec%hub_height / 0.3_wp, 1.000001_wp))
 
         DO i = 1, site%n_nodes
             dx = site%x_coord(i) - hubX
@@ -1647,24 +1607,24 @@ CONTAINS
             x_rot =  dx * COS(theta) + dy * SIN(theta)
             y_rot = -dx * SIN(theta) + dy * COS(theta)
 
-            radial_dist = ABS(y_rot)
-
             IF (x_rot > 1.0_wp) THEN
-                sigma_d0 = (k_star * x_rot / d_wake) + (0.2_wp * SQRT(beta))
-                a1 = m_ct / (8.0_wp * (sigma_d0**2))
-                IF (a1 >= 1.0_wp) a1 = 0.999_wp
+                wake_radius = d_wake / 2.0_wp + alpha * x_rot
+                a_induction = 0.5_wp * (1.0_wp - SQRT(1.0_wp - m_ct))
+                ! Expanded rotor radius right behind the disk (r1 = r_r * sqrt((1-a)/(1-2a)))
+                r1_expanded = (d_wake / 2.0_wp) * SQRT((1.0_wp - a_induction) / &
+                    MAX(1.0E-6_wp, 1.0_wp - 2.0_wp * a_induction))
 
-                b1 = -1.0_wp / (2.0_wp * (sigma_d0**2))
-                c2 = (radial_dist / d_wake)**2
+                deficit_fraction = 2.0_wp * a_induction / &
+                    (1.0_wp + alpha * x_rot / r1_expanded) ** 2
 
                 DO j = 1, site%n_hlevel
                     z_coord = site%h_level(j)
-                    c1 = ((z_coord - h_wake) / d_wake)**2
-                    deficit(i, j) = u_inflow * (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
+                    d_center = SQRT(y_rot ** 2 + (z_coord - h_wake) ** 2)
+                    IF (d_center <= wake_radius) deficit(i, j) = deficit_fraction
                 END DO
             END IF
         END DO
-    END SUBROUTINE niayifar_wake_dense
+    END SUBROUTINE jensen_wake_dense
 
     FUNCTION get_coeff(v_in, v_ref, c_ref, n_pts) RESULT(coeff)
         REAL(wp), INTENT(IN) :: v_in
@@ -2874,7 +2834,7 @@ END MODULE SOGA
 module outputs
     USE precision, ONLY: wp
     USE types,     ONLY: ConfigData, SiteData, TurbineSpec, Population
-    USE physics,   ONLY: calculate_3d_wind_field, get_ambient_wd
+    USE physics,   ONLY: calculate_3d_wind_field, evaluate_physics, get_ambient_wd
 
     implicit none
     PRIVATE
@@ -2882,9 +2842,9 @@ module outputs
     PUBLIC :: save_generational_front
     PUBLIC :: save_final_pareto
     PUBLIC :: save_animation_data
+    PUBLIC :: soga_save_best_layout
     public :: cleanup_memory
     PUBLIC :: soga_save_convergence
-    PUBLIC :: soga_save_best_layout
     PUBLIC :: soga_save_animation_data
 
 contains
@@ -3165,7 +3125,7 @@ contains
         END IF
 
         ! Because soga_assign_fitness sorts the array, index 1 is ALWAYS the absolute best solution.
-        WRITE(f_unit, '(I0,A,F25.5,A,F25.1,A,F25.5,A,F25.1,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5)') &
+        WRITE(f_unit, '(I0,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10)') &
             gen_num, ',', abs(pop%inds(1)%fitness), ',', pop%inds(1)%raw_cost, ',', pop%inds(1)%raw_aep, ',', &
             (pop%inds(1)%raw_cost / (pop%inds(1)%raw_aep * REAL(config%farmlifetime, wp))), ',', pop%inds(1)%raw_fatigue, ',', &
             pop%inds(1)%soft_aep_violation, ',', pop%inds(1)%soft_capex_violation, ',', &
@@ -3176,26 +3136,40 @@ contains
     ! ==================================================================
     ! SOGA OUTPUT 2: The Champion Layout
     ! ==================================================================
-    SUBROUTINE soga_save_best_layout(pop, filename, config)
-        TYPE(Population), INTENT(IN) :: pop
+    SUBROUTINE soga_save_best_layout(pop, filename, config, site, turbines)
+        TYPE(Population), INTENT(INOUT) :: pop
         CHARACTER(LEN=*), INTENT(IN) :: filename
         TYPE(ConfigData), INTENT(IN) :: config
+        TYPE(SiteData), INTENT(IN) :: site
+        TYPE(TurbineSpec), INTENT(IN) :: turbines(:)
         INTEGER :: j, f_unit, ios, n_var
+        REAL(wp), ALLOCATABLE :: farm_power(:), wake_free_power(:,:)
+        REAL(wp) :: efficiency_percent, reference_power
 
         n_var = SIZE(pop%inds(1)%chromosome)
         OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='REPLACE', IOSTAT=ios)
 
-        WRITE(f_unit, '(A)', ADVANCE='NO') 'fitness,raw_cost,raw_aep,LCOE,raw_fatigue,soft_aep_violation,soft_capex_violation,penalty_aep,penalty_capex,penalty_lcoe'
+        ! Reuse the physics engine's wake-affected farm power and wake-free
+        ! turbine reference power. Existing fields below are not modified.
+        ALLOCATE(farm_power(site%nsteps), wake_free_power(COUNT(pop%inds(1)%chromosome > 1), site%nsteps))
+        CALL evaluate_physics(pop%inds(1), site, turbines, config, farm_power_ts=farm_power, &
+                              turbine_wake_free_power_ts=wake_free_power)
+        reference_power = SUM(wake_free_power)
+        efficiency_percent = 0.0_wp
+        IF (reference_power > 0.0_wp) efficiency_percent = 100.0_wp * SUM(farm_power) / reference_power
+        DEALLOCATE(farm_power, wake_free_power)
+
+        WRITE(f_unit, '(A)', ADVANCE='NO') 'fitness,raw_cost,raw_aep,LCOE,raw_fatigue,soft_aep_violation,soft_capex_violation,penalty_aep,penalty_capex,penalty_lcoe,efficiency_percent'
         DO j = 1, n_var
             WRITE(f_unit, '(A,I0)', ADVANCE='NO') ',gene_', j
         END DO
         WRITE(f_unit, *)
 
-        WRITE(f_unit, '(F25.5,A,F25.1,A,F25.5,A,F25.1,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5,A,F25.5)', ADVANCE='NO') &
+        WRITE(f_unit, '(F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10,A,F25.10)', ADVANCE='NO') &
             pop%inds(1)%fitness, ',', pop%inds(1)%raw_cost, ',', pop%inds(1)%raw_aep, ',', &
             (pop%inds(1)%raw_cost / (pop%inds(1)%raw_aep * REAL(config%farmlifetime, wp))), ',', &
             pop%inds(1)%raw_fatigue, ',', pop%inds(1)%soft_aep_violation, ',', pop%inds(1)%soft_capex_violation, ',', &
-            pop%inds(1)%penalty_aep, ',', pop%inds(1)%penalty_capex, ',', pop%inds(1)%penalty_lcoe
+            pop%inds(1)%penalty_aep, ',', pop%inds(1)%penalty_capex, ',', pop%inds(1)%penalty_lcoe, ',', efficiency_percent
 
         DO j = 1, n_var
             WRITE(f_unit, '(A,I0)', ADVANCE='NO') ',', pop%inds(1)%chromosome(j)
@@ -3234,14 +3208,14 @@ contains
 
         DO t_step = 1, site%nsteps
             DO i = 1, site%n_nodes
-                WRITE(f_unit, '(I0,A,F12.2,A,F12.2)', ADVANCE='NO') &
+                WRITE(f_unit, '(I0,A,F25.10,A,F25.10)', ADVANCE='NO') &
                     t_step, ',', site%x_coord(i), ',', site%y_coord(i)
                 theta = get_ambient_wd(site, config, i, t_step)
                 DO j = 1, site%n_hlevel
                     mag = ws_out(i, j, t_step)
                     u_val = mag * COS(theta)
                     v_val = mag * SIN(theta)
-                    WRITE(f_unit, '(A,F10.3,A,F10.3,A,F10.3)', ADVANCE='NO') &
+                    WRITE(f_unit, '(A,F25.10,A,F25.10,A,F25.10)', ADVANCE='NO') &
                         ',', u_val, ',', v_val, ',', mag
                 END DO
                 WRITE(f_unit, *)

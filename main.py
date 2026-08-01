@@ -1007,6 +1007,7 @@ class OWFLOGui(ctk.CTk):
     def plot_soga_3d(self):
         target_obj = self.soga_target.get()
         turb_file = self.path_turb.get() # Get the turbine data path
+        out_dir = self.path_out.get()    # Use the Farm Setup output directory
         try:
             z_scale = float(self.soga_z_scale.get())
         except ValueError:
@@ -1018,7 +1019,12 @@ class OWFLOGui(ctk.CTk):
         def worker():
             try:
                 # Pass the new parameters to visualizer
-                visualizer.generate_soga_3d_layout(target_obj=target_obj, z_scale=z_scale, turb_path=turb_file)
+                visualizer.generate_soga_3d_layout(
+                    target_obj=target_obj,
+                    z_scale=z_scale,
+                    turb_path=turb_file,
+                    output_dir=out_dir
+                )
             except Exception as e:
                 self.log(f"🔴 Error in 3D viewer: {e}")
             self.after(0, lambda: self.btn_soga_3d.configure(state="normal"))
