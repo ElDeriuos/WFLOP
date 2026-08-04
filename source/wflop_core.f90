@@ -686,11 +686,8 @@ CONTAINS
     ! SUBROUTINE: evaluate_financial_cost
     ! Master routing to calculate total farm cost
     ! ==================================================================
-    SUBROUTINE evaluate_financial_cost(ind, site, turbines, config)
+    SUBROUTINE evaluate_financial_cost(ind)
         TYPE(Individual),  INTENT(INOUT) :: ind
-        TYPE(SiteData),    INTENT(IN)    :: site
-        TYPE(TurbineSpec), INTENT(IN)    :: turbines(:)
-        Type(ConfigData),  Intent(In)    :: config
 
         INTEGER :: n_turb
 
@@ -1175,13 +1172,15 @@ CONTAINS
                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
 
                     CALL analytical_wake_sparse(m, n_idx, turbines(t_type), m_ct, site, turbines, config, &
-                                                n_turb, node_idx, type_turb, t_step, single_deficit_u, &
-                                                single_added_i)
+                                                n_turb, node_idx, type_turb, t_step, ti_new, ws_new, &
+                                                single_deficit_u, single_added_i)
 
-                    ! Jensen/Mosetti/Grady: sum kinetic-energy deficits.
-                    ! Store dimensional deficit squared; convert to velocity below.
-                    wake_deficit_u = wake_deficit_u + single_deficit_u ** 2
-                    wake_added_i_sq = 0.0_wp
+                    ! Niayifar & Porté-Agel (2016), Equation 16: Uj = U∞ - Σ(Ui - Uij)
+                    ! Linear summation of normalized velocity deficits
+                    wake_deficit_u = wake_deficit_u + single_deficit_u
+                    ! Maximum turbulence selection (dominant source governs)
+                    ! Transition from squared-sum to MAX-based superposition
+                    wake_added_i_sq = MAX(wake_added_i_sq, single_added_i ** 2)
                 END DO
 
                 ! Apply aggregated wake to local conditions
@@ -1189,10 +1188,10 @@ CONTAINS
                     n_idx = node_idx(m)
                     v_ambient = get_ambient_ws(site, config, n_idx, h_idx(m), t_step)
 
-                    IF (wake_deficit_u(m) < 1.0_wp) THEN
-                        ws_new(m) = v_ambient * MAX(0.0_wp, 1.0_wp - SQRT(wake_deficit_u(m)))
-                        ! Jensen/Mosetti/Grady do not model turbulence feedback.
-                        ti_new(m) = I_ambient
+                    IF (wake_deficit_u(m) < v_ambient) THEN
+                        ws_new(m) = v_ambient - wake_deficit_u(m)
+                        ! Niayifar (2016) Eq. (8): I_local = SQRT(I_0^2 + I_plus^2)
+                        ti_new(m) = SQRT(I_ambient**2 + wake_added_i_sq(m))
                     ELSE
                         ws_new(m) = 0.0_wp
                         ti_new(m) = I_ambient
@@ -1336,7 +1335,7 @@ CONTAINS
     !   added_i(:)   - Wake-added turbulence intensity at each turbine [dimensionless]
     ! ==================================================================
     SUBROUTINE analytical_wake_sparse(m, n_idx, t_spec, m_ct1, site, turbines, config, &
-                                  n_turb, node_idx, type_turb, t_step, deficit_u, added_i)
+                                  n_turb, node_idx, type_turb, t_step, ti_new, ws_new, deficit_u, added_i)
         implicit NONE
         TYPE(SiteData),    INTENT(IN)  :: site
         TYPE(TurbineSpec), INTENT(IN)  :: turbines(:)
@@ -1345,16 +1344,17 @@ CONTAINS
         INTEGER,           INTENT(IN)  :: m, n_idx, n_turb, t_step
         INTEGER,           INTENT(IN)  :: node_idx(:), type_turb(:)
         REAL(wp),          INTENT(IN)  :: m_ct1
+        REAL(wp),          INTENT(IN)  :: ti_new(:), ws_new(:)  ! Local turbulence intensity at each turbine inflow (dimensionless)
         REAL(wp),          INTENT(OUT) :: deficit_u(:), added_i(:)
 
         ! Removed static k_star - now computed dynamically per Niayifar 2016 Eq. 15
 
         REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake, r_rotor
-        REAL(wp) :: dx, dy, x_rot, y_rot, d_center, a_induction
-        REAL(wp) :: wake_radius, z_coord, m_ct, alpha, deficit_fraction
+        REAL(wp) :: dx, dy, x_rot, y_rot, d_center
+        REAL(wp) :: sigma, sigma_d0, a1, b1, c1, c2, z_coord, k_star, m_ct
         INTEGER  :: i, j_node, j_type
-        REAL(wp) :: r_wake, a_overlap, a_rotor
-        REAL(wp) :: r1_expanded
+        REAL(wp) :: ti_local, u_inflow, norm_deficit, a_induction
+        REAL(wp) :: r_wake, a_overlap, a_rotor, i_plus_unweighted
 
         deficit_u = 0.0_wp
         added_i   = 0.0_wp
@@ -1367,9 +1367,14 @@ CONTAINS
         m_ct   = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
         beta   = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
 
-        ! Jensen entrainment coefficient used by Mosetti and Grady:
-        ! alpha = 0.5 / ln(hub height / surface roughness), z0 = 0.3 m.
-        alpha = 0.5_wp / LOG(MAX(t_spec%hub_height / 0.3_wp, 1.000001_wp))
+        u_inflow = ws_new(m)
+        ! Extract local turbulence intensity at the wake-producing turbine
+        ti_local = ti_new(m)
+        a_induction = 0.5_wp * (1.0_wp - SQRT(1.0_wp - m_ct))
+
+        ! Niayifar & Porté-Agel (2016), Equation 15
+        ! Wake expansion rate depends on local turbulence intensity
+        k_star = 0.3837_wp * ti_local + 0.003678_wp
 
         DO i = 1, n_turb
             IF (i == m) CYCLE
@@ -1389,23 +1394,40 @@ CONTAINS
             !IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
             ! Downstream check (strictly downwind: x_rot > 1.0 m)
             IF (x_rot > 1.0_wp) THEN
-                ! Jensen top-hat wake: radius grows linearly from rotor radius.
-                wake_radius = d_wake / 2.0_wp + alpha * x_rot
-                j_type = type_turb(i)
+                ! Velocity Deficit (Bastankhah Gaussian)
+                sigma_d0 = (k_star * x_rot / d_wake) + (0.2_wp * SQRT(beta))
+                sigma = sigma_d0 * d_wake
+
+                a1 = m_ct / (8.0_wp * (sigma_d0 ** 2))
+                IF (a1 >= 1.0_wp) a1 = 0.999_wp
+
+                b1 = -1.0_wp / (2.0_wp * (sigma_d0 ** 2))
+                c2 = (y_rot / d_wake) ** 2
+
+                j_type  = type_turb(i)
                 z_coord = turbines(j_type)%hub_height
-                d_center = SQRT(y_rot ** 2 + (z_coord - h_wake) ** 2)
-                IF (d_center <= wake_radius) THEN
-                    ! CT = 4a(1-a); use lower Betz branch for induction a.
-                    a_induction = 0.5_wp * (1.0_wp - SQRT(1.0_wp - m_ct))
+                c1 = ((z_coord - h_wake) / d_wake) ** 2
 
-                    ! Expanded rotor radius right behind the disk (r1 = r_r * sqrt((1-a)/(1-2a)))
-                    r1_expanded = (d_wake / 2.0_wp) * SQRT((1.0_wp - a_induction) / &
-                        MAX(1.0E-6_wp, 1.0_wp - 2.0_wp * a_induction))
+                ! Centerline/radial Gaussian velocity deficit fraction
+                norm_deficit = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
 
-                    deficit_fraction = 2.0_wp * a_induction / &
-                        (1.0_wp + alpha * x_rot / r1_expanded) ** 2
-                    deficit_u(i) = deficit_fraction
-                END IF
+                ! Dimensional deficit in m/s (Niayifar Eq. 16)
+                deficit_u(i) = u_inflow * norm_deficit
+
+                ! --- Niayifar (2016) Eq. (18) & Eq. (14) Turbulence Area Overlap ---
+                r_wake   = 2.0_wp * sigma                  ! 4*sigma wake diameter => r_wake = 2*sigma
+                r_rotor  = turbines(j_type)%rotor_diameter / 2.0_wp
+                d_center = SQRT((y_rot**2) + ((z_coord - h_wake)**2))
+
+                a_overlap = circle_overlap_area(r_wake, r_rotor, d_center)
+                a_rotor   = pi * (r_rotor**2)
+
+                ! Crespo & Hernández (1996) added turbulence model (Niayifar Eq. 14)
+                i_plus_unweighted = 0.73_wp * (a_induction**0.8325_wp) * &
+                                    (I_ambient**0.0325_wp) * ((x_rot / d_wake)**(-0.32_wp))
+
+                ! Area-weighted added turbulence intensity (Niayifar Eq. 18)
+                added_i(i) = (a_overlap / a_rotor) * i_plus_unweighted
             END IF
         END DO
     END SUBROUTINE analytical_wake_sparse
@@ -1481,15 +1503,16 @@ CONTAINS
                     m_ct = get_coeff(v_local, turbines(t_type)%v_ref, &
                                      turbines(t_type)%ct_ref, turbines(t_type)%n_points)
 
-                    CALL jensen_wake_dense(n_idx, turbines(t_type), m_ct, site, config, t_step, single_deficit)
+                    CALL niayifar_wake_dense(n_idx, turbines(t_type), m_ct, ti_grid(m), v_local, &
+                                             site, config, t_step, single_deficit)
 
-                    wake_deficit = wake_deficit + single_deficit ** 2
+                    wake_deficit = wake_deficit + single_deficit
                 END DO
 
                 DO i = 1, site%n_nodes
                     DO j = 1, site%n_hlevel
                         v_local = get_ambient_ws(site, config, i, j, t_step)
-                        ws_new(i, j) = v_local * MAX(0.0_wp, 1.0_wp - SQRT(wake_deficit(i, j)))
+                        ws_new(i, j) = MAX(0.0_wp, v_local - wake_deficit(i, j))
                     END DO
                 END DO
 
@@ -1576,18 +1599,18 @@ CONTAINS
     ! SUBROUTINE: niayifar_wake_dense
     ! Dense grid deficit evaluator using Niayifar formulation
     ! ==================================================================
-    SUBROUTINE jensen_wake_dense(n_idx, t_spec, m_ct1, site, config, t_step, deficit)
+    SUBROUTINE niayifar_wake_dense(n_idx, t_spec, m_ct1, ti_local, u_inflow, &
+                                    site, config, t_step, deficit)
         TYPE(SiteData),    INTENT(IN)  :: site
         TYPE(ConfigData),  INTENT(IN)  :: config
         TYPE(TurbineSpec), INTENT(IN)  :: t_spec
         INTEGER,           INTENT(IN)  :: n_idx, t_step
-        REAL(wp),          INTENT(IN)  :: m_ct1
+        REAL(wp),          INTENT(IN)  :: m_ct1, ti_local, u_inflow
         REAL(wp),          INTENT(OUT) :: deficit(:,:)
 
-        REAL(wp) :: hubX, hubY, theta, d_wake, h_wake, alpha
-        REAL(wp) :: dx, dy, x_rot, y_rot, wake_radius, d_center
-        REAL(wp) :: z_coord, m_ct, a_induction, deficit_fraction
-        real(wp) :: r1_expanded
+        REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake
+        REAL(wp) :: dx, dy, x_rot, y_rot
+        REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord, k_star, m_ct
         INTEGER  :: i, j
 
         deficit = 0.0_wp
@@ -1598,7 +1621,9 @@ CONTAINS
         d_wake = t_spec%rotor_diameter
         h_wake = t_spec%hub_height
         m_ct   = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
-        alpha = 0.5_wp / LOG(MAX(t_spec%hub_height / 0.3_wp, 1.000001_wp))
+        beta   = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
+
+        k_star = 0.3837_wp * ti_local + 0.003678_wp
 
         DO i = 1, site%n_nodes
             dx = site%x_coord(i) - hubX
@@ -1607,24 +1632,24 @@ CONTAINS
             x_rot =  dx * COS(theta) + dy * SIN(theta)
             y_rot = -dx * SIN(theta) + dy * COS(theta)
 
-            IF (x_rot > 1.0_wp) THEN
-                wake_radius = d_wake / 2.0_wp + alpha * x_rot
-                a_induction = 0.5_wp * (1.0_wp - SQRT(1.0_wp - m_ct))
-                ! Expanded rotor radius right behind the disk (r1 = r_r * sqrt((1-a)/(1-2a)))
-                r1_expanded = (d_wake / 2.0_wp) * SQRT((1.0_wp - a_induction) / &
-                    MAX(1.0E-6_wp, 1.0_wp - 2.0_wp * a_induction))
+            radial_dist = ABS(y_rot)
 
-                deficit_fraction = 2.0_wp * a_induction / &
-                    (1.0_wp + alpha * x_rot / r1_expanded) ** 2
+            IF (x_rot > 1.0_wp) THEN
+                sigma_d0 = (k_star * x_rot / d_wake) + (0.2_wp * SQRT(beta))
+                a1 = m_ct / (8.0_wp * (sigma_d0**2))
+                IF (a1 >= 1.0_wp) a1 = 0.999_wp
+
+                b1 = -1.0_wp / (2.0_wp * (sigma_d0**2))
+                c2 = (radial_dist / d_wake)**2
 
                 DO j = 1, site%n_hlevel
                     z_coord = site%h_level(j)
-                    d_center = SQRT(y_rot ** 2 + (z_coord - h_wake) ** 2)
-                    IF (d_center <= wake_radius) deficit(i, j) = deficit_fraction
+                    c1 = ((z_coord - h_wake) / d_wake)**2
+                    deficit(i, j) = u_inflow * (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
                 END DO
             END IF
         END DO
-    END SUBROUTINE jensen_wake_dense
+    END SUBROUTINE niayifar_wake_dense
 
     FUNCTION get_coeff(v_in, v_ref, c_ref, n_pts) RESULT(coeff)
         REAL(wp), INTENT(IN) :: v_in
@@ -1989,9 +2014,8 @@ CONTAINS
         TYPE(ConfigData),  INTENT(IN)    :: config
         INTEGER :: i, n_turb
         LOGICAL :: need_cost, need_physics
-        REAL(wp) :: tmp_val
 
-        !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i, n_turb, need_cost, need_physics, tmp_val)
+        !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i, n_turb, need_cost, need_physics)
         DO i = 1, SIZE(pop%inds)
             n_turb = COUNT(pop%inds(i)%chromosome > 1)
 
@@ -2015,7 +2039,7 @@ CONTAINS
                 need_physics = objective_requires_physics(config%obj_1) .OR. objective_requires_physics(config%obj_2)
 
                 IF (need_cost) THEN
-                    CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
+                    CALL evaluate_financial_cost(pop%inds(i))
                 ELSE
                     pop%inds(i)%raw_cost = 0.0_wp
                 END IF
@@ -2678,7 +2702,7 @@ CONTAINS
                 need_physics = objective_requires_physics(config%obj_1)
 
                 IF (need_cost) THEN
-                    CALL evaluate_financial_cost(pop%inds(i), site, turbines, config)
+                    CALL evaluate_financial_cost(pop%inds(i))
                 ELSE
                     pop%inds(i)%raw_cost = 0.0_wp
                 END IF
