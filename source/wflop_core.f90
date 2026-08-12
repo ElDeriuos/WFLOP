@@ -1253,21 +1253,23 @@ CONTAINS
                 IF (PRESENT(turbine_mean_ct)) turbine_mean_ct(m) = turbine_mean_ct(m) + turbine_ct
                 IF (PRESENT(turbine_mean_thrust)) turbine_mean_thrust(m) = turbine_mean_thrust(m) + turbine_thrust
 
-                ! --- 2. YANG 2025 FATIGUE LIFE CYCLES ---
-                ! Local/wake-affected operational fatigue life, N_i,OPT.
-                ! No power output => operational fatigue life remains zero.
+                ! --- 2. YANG 2025 FATIGUE LIFE ASSESSMENT (Miner's Rule Damage Accumulation) ---
+                ! Cumulative operational fatigue damage: D_opt = SUM( p_env / N_local )
                 IF (v_local >= turbines(t_type)%cut_in .AND. &
                     v_local <= turbines(t_type)%cut_off .AND. cp_val > 0.0_wp) THEN
 
                     N_local = yang_fatigue_cycles(v_local, i_local, turbines(t_type))
-                    fatigue_life(m) = fatigue_life(m) + p_env * N_local
+                    IF (N_local > FATIGUE_EPS) THEN
+                        fatigue_life(m) = fatigue_life(m) + (p_env / N_local)
+                    END IF
                 END IF
 
-                ! Reference/original fatigue life, N_i,ORI, under the same
-                ! environmental state but without wake speed deficit or wake-added TI.
+                ! Cumulative ambient reference fatigue damage: D_ref = SUM( p_env / N_ref )
                 v_ambient = get_ambient_ws(site, config, n_idx, h_idx(m), t_step)
                 N_ref = yang_fatigue_cycles(v_ambient, I_ambient, turbines(t_type))
-                ref_fatigue_life(m) = ref_fatigue_life(m) + p_env * N_ref
+                IF (N_ref > FATIGUE_EPS) THEN
+                    ref_fatigue_life(m) = ref_fatigue_life(m) + (p_env / N_ref)
+                END IF
             END DO
 
             total_aep = total_aep + (tep_farm * p_env)
@@ -1297,10 +1299,15 @@ CONTAINS
         ind%raw_aep = total_aep
 
         ! Yang normalized fatigue life: N_i,OPT / N_i,ORI.
-        ! raw_fatigue is stored as a physical/reporting metric:
-        !     higher value = longer normalized fatigue life = better layout.
+        ! Convert accumulated damage back to effective total fatigue cycles: N_eff = 1.0 / D
+        ! Then compute Yang normalized fatigue life per turbine: N_i,OPT / N_i,ORI = D_ref / D_opt
         DO m = 1, n_turb
-            IF (ref_fatigue_life(m) > FATIGUE_EPS) THEN
+            IF (fatigue_life(m) > FATIGUE_EPS) THEN
+                ! Effective total cycles for optimized and reference conditions
+                fatigue_life(m)     = 1.0_wp / fatigue_life(m)
+                ref_fatigue_life(m) = 1.0_wp / ref_fatigue_life(m)
+                
+                ! Ratio of effective cycles (higher value = lower fatigue damage = better layout)
                 norm_fatigue_life(m) = fatigue_life(m) / ref_fatigue_life(m)
             ELSE
                 norm_fatigue_life(m) = 0.0_wp
