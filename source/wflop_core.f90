@@ -1298,24 +1298,28 @@ CONTAINS
         total_aep = total_aep * 8760.0_wp / 1.0E9_wp ! Convert to GWh
         ind%raw_aep = total_aep
 
-        ! Yang normalized fatigue life: N_i,OPT / N_i,ORI.
-        ! Convert accumulated damage back to effective total fatigue cycles: N_eff = 1.0 / D
-        ! Then compute Yang normalized fatigue life per turbine: N_i,OPT / N_i,ORI = D_ref / D_opt
+        ! 1. Convert cumulative damage fractions (D) to effective total fatigue cycles (N_eff = 1 / D)
+        !    and compute per-turbine normalized fatigue life ratio
         DO m = 1, n_turb
-            IF (fatigue_life(m) > FATIGUE_EPS) THEN
-                ! Effective total cycles for optimized and reference conditions
-                fatigue_life(m)     = 1.0_wp / fatigue_life(m)
-                ref_fatigue_life(m) = 1.0_wp / ref_fatigue_life(m)
-                
-                ! Ratio of effective cycles (higher value = lower fatigue damage = better layout)
+            IF (fatigue_life(m) > FATIGUE_EPS .AND. ref_fatigue_life(m) > FATIGUE_EPS) THEN
+                fatigue_life(m)      = 1.0_wp / fatigue_life(m)
+                ref_fatigue_life(m)  = 1.0_wp / ref_fatigue_life(m)
                 norm_fatigue_life(m) = fatigue_life(m) / ref_fatigue_life(m)
             ELSE
+                fatigue_life(m)      = 0.0_wp
+                ref_fatigue_life(m)  = 0.0_wp
                 norm_fatigue_life(m) = 0.0_wp
             END IF
         END DO
 
         avg_norm_life = SUM(norm_fatigue_life) / REAL(n_turb, wp)
-        min_norm_life = MINVAL(norm_fatigue_life)
+
+        ! 2. Yang et al. (2025) Objective Eq. (11–12): Ratio of weakest turbine lifetime
+        IF (MINVAL(ref_fatigue_life) > FATIGUE_EPS) THEN
+            min_norm_life = MINVAL(fatigue_life) / MINVAL(ref_fatigue_life)
+        ELSE
+            min_norm_life = 0.0_wp
+        END IF
 
         ! ==========================================================
         ! SELECT THE REPORTED YANG FATIGUE METRIC
@@ -1548,74 +1552,6 @@ CONTAINS
         DEALLOCATE(ws_new, ws_old, wake_deficit, single_deficit)
 
     END SUBROUTINE calculate_3d_wind_field
-
-    ! ! ==================================================================
-    ! ! SUBROUTINE: bastankhah_wake_dense
-    ! ! Calculates the wake deficit across ALL nodes and ALL height levels
-    ! ! ==================================================================
-    ! SUBROUTINE bastankhah_wake_dense(n_idx, t_spec, m_ct1, site, config, t_step, deficit)
-    !     TYPE(SiteData),    INTENT(IN)  :: site
-    !     TYPE(ConfigData),  INTENT(IN)  :: config
-    !     TYPE(TurbineSpec), INTENT(IN)  :: t_spec
-    !     INTEGER,           INTENT(IN)  :: n_idx, t_step
-    !     REAL(wp),          INTENT(IN)  :: m_ct1
-    !     REAL(wp),          INTENT(OUT) :: deficit(:,:) ! 2D: (n_nodes, n_hlevels)
-
-    !     REAL(wp), PARAMETER :: k_star = 0.0324_wp
-
-    !     REAL(wp) :: beta, hubX, hubY, theta, d_wake, h_wake
-    !     REAL(wp) :: dx, dy, x_rot, y_rot, x_rel
-    !     REAL(wp) :: radial_dist, sigma_d0, a1, b1, c1, c2, z_coord
-    !     INTEGER  :: i, j
-
-    !     real(wp) :: m_ct
-
-    !     ! 1. Initialize output deficit array to zero
-    !     deficit = 0.0_wp
-
-    !     ! 2. Get properties of the wake-producing turbine
-    !     hubX   = site%x_coord(n_idx)
-    !     hubY   = site%y_coord(n_idx)
-    !     theta  = get_ambient_wd(site, config, n_idx, t_step)
-    !     d_wake = t_spec%rotor_diameter
-    !     h_wake = t_spec%hub_height
-    !     m_ct = MAX(0.0001_wp, MIN(m_ct1, 0.9999_wp))
-    !     ! 3. Calculate beta
-    !     beta = 0.5_wp * ((1.0_wp + SQRT(1.0_wp - m_ct)) / SQRT(1.0_wp - m_ct))
-
-    !     ! 4. Loop through EVERY node in the grid
-    !     DO i = 1, site%n_nodes
-
-    !         ! 5. Calculate rotated coordinates
-    !         dx = site%x_coord(i) - hubX
-    !         dy = site%y_coord(i) - hubY
-    !         x_rot =  dx * COS(theta) + dy * SIN(theta)
-    !         y_rot = -dx * SIN(theta) + dy * COS(theta)
-
-    !         radial_dist = ABS(y_rot)
-    !         x_rel = MAX(x_rot, 0.0_wp)
-
-    !         ! 6. Logic Gates: Downstream AND within 3 diameters
-    !         IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
-
-    !             sigma_d0 = (k_star * x_rel / d_wake) + (0.2_wp * SQRT(beta))
-    !             a1 = m_ct / (8.0_wp * (sigma_d0 ** 2))
-
-    !             IF (a1 >= 1.0_wp) a1 = 0.999_wp
-
-    !             b1 = -1.0_wp / (2.0_wp * (sigma_d0 ** 2))
-    !             c2 = (radial_dist / d_wake) ** 2
-
-    !             ! 7. Calculate deficit for EVERY height level at this node
-    !             DO j = 1, site%n_hlevel
-    !                 z_coord = site%h_level(j)
-    !                 c1 = ((z_coord - h_wake) / d_wake) ** 2
-
-    !                 deficit(i, j) = (1.0_wp - SQRT(1.0_wp - a1)) * EXP(b1 * (c1 + c2))
-    !             END DO
-    !         END IF
-    !     END DO
-    ! END SUBROUTINE bastankhah_wake_dense
 
     ! ==================================================================
     ! SUBROUTINE: niayifar_wake_dense
