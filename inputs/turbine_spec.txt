@@ -1,15 +1,15 @@
-Number of turbine types	
+Number of turbine types
 5
-====================================================================================================
-diameter	rated power	cut in		cut off		Height		Turbine name
-198.0		10.		4.		25.		119.0		IEA_Reference_10MW_198
-./inputs/Turbines/IEA_Reference_10MW_198.csv
-240.0		15.		3.		25.		150.0		IEA_Reference_15MW_240
-./inputs/Turbines/IEA_Reference_15MW_240.csv
-126.0		5.		3.		25.		90.0		NREL_Reference_5MW_126
+==============================================================================================================
+diameter	rated_power	cut_in		cut_off		Height  Pile's_Rotor    Tower's_Tickness    Name
+126.0		5.		    3.		    25.		    90.0    3.0             0.027               NREL_Reference_5MW_126
 ./inputs/Turbines/NREL_Reference_5MW_126.csv
-178.3		10.		4.		25.		119.0		DTU_Reference_v1_10MW_178
-./inputs/Turbines/DTU_Reference_v1_10MW_178.csv
-164.0		8.		4.		25.		110.0   	LEANWIND_Reference_8MW_164
+164.0		8.		    4.		    25.		    110.0   3.85            0.036               LEANWIND_Reference_8MW_164
 ./inputs/Turbines/LEANWIND_Reference_8MW_164.csv
-====================================================================================================
+198.0		10.		    4.		    25.		    119.0   4.15            0.038               IEA_Reference_10MW_198
+./inputs/Turbines/IEA_Reference_10MW_198.csv
+178.3		10.		    4.		    25.		    119.0   4.15            0.038               DTU_Reference_v1_10MW_178
+./inputs/Turbines/DTU_Reference_v1_10MW_178.csv
+240.0		15.		    3.		    25.		    150.0   5.00            0.045517            IEA_Reference_15MW_240
+./inputs/Turbines/IEA_Reference_15MW_240.csv
+=================================================================================================================

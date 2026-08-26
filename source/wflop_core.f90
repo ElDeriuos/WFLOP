@@ -110,6 +110,9 @@ MODULE types
         REAL(wp) :: hub_height
         REAL(wp) :: cut_in
         REAL(wp) :: cut_off
+        real(wp) :: r_pile                 ! Tower-base radius specific to each turbine class
+        real(wp) :: t_tower                ! Tower-base thickness specific to each turbine class
+        real(wp) :: I_z                    ! Moment of Inertia: pi * (r_pile**3) * t_tower
         INTEGER  :: h_idx
 
         ! Interpolation tables for Cp and Ct
@@ -258,6 +261,7 @@ CONTAINS
         ! Temporary array to find unique heights (assuming max 100 types)
         REAL(wp) :: temp_h(100), current_h
         LOGICAL  :: is_unique
+        REAL(wp), PARAMETER :: PI = 3.141592653589793_wp
 
         OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', ACTION='READ', IOSTAT=ios)
         IF (ios /= 0) STOP "🔴 ERROR: Missing turbine_spec.txt"
@@ -283,7 +287,9 @@ CONTAINS
 
         DO i = (nd_turbs + 1), site%n_types
             READ(f_unit, *) turbines(i)%rotor_diameter, turbines(i)%rated_power, &
-                            turbines(i)%cut_in, turbines(i)%cut_off, turbines(i)%hub_height
+                            turbines(i)%cut_in, turbines(i)%cut_off, turbines(i)%hub_height, &
+                            turbines(i)%r_pile, turbines(i)%t_tower
+            turbines(i)%I_z = PI * (turbines(i)%r_pile ** 3) * turbines(i)%t_tower
 
             READ(f_unit, '(A)') curve_path
             CALL read_turbine_curve(TRIM(curve_path), turbines(i))
@@ -1030,11 +1036,11 @@ MODULE physics
     REAL(wp), PARAMETER :: rho       = 1.225_wp      ! Air density (kg/m^3)
     REAL(wp), PARAMETER :: pi        = 3.141592653589793_wp
 
-    ! Structural (Tower Root Approximation for typical 2MW-5MW)
-    REAL(wp), PARAMETER :: r_pile    = 2.0_wp        ! Tower root radius (m)
-    REAL(wp), PARAMETER :: t_tower   = 0.03_wp       ! Tower root thickness (m)
-    REAL(wp), PARAMETER :: I_z       = pi * &
-                            (r_pile**3) * t_tower    ! Area moment of inertia (m^4) ~ pi * r^3 * t
+    ! ! Structural (Tower Root Approximation for typical 2MW-5MW)
+    ! REAL(wp), PARAMETER :: r_pile    = 2.0_wp        ! Tower root radius (m)
+    ! REAL(wp), PARAMETER :: t_tower   = 0.03_wp       ! Tower root thickness (m)
+    ! REAL(wp), PARAMETER :: I_z       = pi * &
+    !                         (r_pile**3) * t_tower    ! Area moment of inertia (m^4) ~ pi * r^3 * t
 
     ! Material Properties (Typical Offshore Steel in MPa)
     REAL(wp), PARAMETER :: sigma_y   = 345.0_wp      ! Yield strength (MPa)
@@ -1702,8 +1708,8 @@ CONTAINS
         F_peak = 0.5_wp * rho * area * ct_val * ((v_hub * (1.0_wp + g_v * I_hub))**2)
 
         ! Eq. (6): tower-root stress components, converted Pa -> MPa.
-        sig_mean = (F_mean * t_spec%hub_height * r_pile) / I_z / 1.0E6_wp
-        sig_max  = (F_peak * t_spec%hub_height * r_pile) / I_z / 1.0E6_wp
+        sig_mean = (F_mean * t_spec%hub_height * t_spec%r_pile) / t_spec%I_z / 1.0E6_wp
+        sig_max  = (F_peak * t_spec%hub_height * t_spec%r_pile) / t_spec%I_z / 1.0E6_wp
         sig_a    = MAX(sig_max - sig_mean, 0.0_wp)
 
         ! Eq. (8): modified average stress for Goodman correction.
@@ -1726,7 +1732,7 @@ CONTAINS
         END IF
 
         ! Eq. (9)-(10): DNV two-slope S-N curve.
-        thickness_corr = k_fatigue * LOG10(t_tower / t_ref)
+        thickness_corr = k_fatigue * LOG10(t_spec%t_tower / t_ref)
 
         ! First assume the high-cycle branch; if N <= 1E7, switch branch.
         log_N = 16.081_wp - 5.0_wp * (LOG10(sig_e) + thickness_corr)
