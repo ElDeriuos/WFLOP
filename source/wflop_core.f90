@@ -234,7 +234,7 @@ CONTAINS
 
         ! Default
         config%n_obj = 2
-        config%max_iter = 10
+        config%max_iter = 20
         config%farmlifetime = 25
         PRINT *, "Configuration loaded successfully."
         ! Safety corrections for soft-constraint parameters

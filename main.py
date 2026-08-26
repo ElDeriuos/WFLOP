@@ -1046,7 +1046,8 @@ class OWFLOGui(ctk.CTk):
                     file_path=os.path.join(out_dir, 'animation_data_soga.csv'),
                     level_idx=level_idx,
                     frame_step=user_step,
-                    fps=user_fps
+                    fps=user_fps,
+                    turb_path=self.path_turb.get()
                 )
                 if out_mp4:
                     if sys.platform == "win32": os.startfile(os.path.normpath(out_mp4))
@@ -1305,7 +1306,8 @@ class OWFLOGui(ctk.CTk):
                     level_idx=level_idx,
                     fast_mode=False,
                     frame_step=user_step,
-                    fps=user_fps
+                    fps=user_fps,
+                    turb_path=self.path_turb.get()
                 )
                 if out_mp4:
                     self.log(f"✅ Animation saved to {out_mp4}")

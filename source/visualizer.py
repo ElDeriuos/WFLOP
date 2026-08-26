@@ -3,7 +3,8 @@ import json
 import pandas as pd
 import numpy as np
 import matplotlib
-# matplotlib.use('Agg') 
+# Visualization functions save files from worker threads; never initialize a GUI backend here.
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.tri import Triangulation
@@ -14,13 +15,54 @@ import ffmpeg
 # =====================================================================
 # CONFIGURATION & METADATA
 # =====================================================================
-TURBINE_META = {
-    2: {'name': 'IEA 10MW',  'height': 119.0, 'color': 'blue',   'radius': 15.0, 'marker': 'o'},
-    3: {'name': 'IEA 15MW',  'height': 150.0, 'color': 'red',    'radius': 16.0, 'marker': '^'},
-    4: {'name': 'NREL 5MW',  'height': 90.0,  'color': 'green',  'radius': 14.0, 'marker': 's'},
-    5: {'name': 'DTU 10MW',  'height': 119.0, 'color': 'orange', 'radius': 15.0, 'marker': 'D'},
-    6: {'name': 'LEANWIND',  'height': 110.0, 'color': 'purple', 'radius': 14.5, 'marker': 'v'}
-}
+# Styling is independent of turbine identity; identities and dimensions come from turbine_spec.
+_TURBINE_STYLES = [
+    {'color': 'blue', 'marker': 'o'}, {'color': 'red', 'marker': '^'},
+    {'color': 'green', 'marker': 's'}, {'color': 'orange', 'marker': 'D'},
+    {'color': 'purple', 'marker': 'v'}, {'color': 'teal', 'marker': 'P'},
+]
+TURBINE_META = {}
+
+
+def _load_turbine_meta(turb_path='./inputs/turbine_spec.txt'):
+    """Parse turbine names, hub heights and diameters in Fortran gene order.
+
+    Gene 1 is empty; gene 2 is the first turbine row in turbine_spec, etc.
+    """
+    path = turb_path or './inputs/turbine_spec.txt'
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = [line.strip() for line in f if line.strip()]
+        count = int(lines[1])
+        # Each turbine record is followed by its power-curve file path.
+        rows = []
+        for row in lines[4:]:
+            fields = row.split()
+            try:
+                float(fields[0]); float(fields[4])
+            except (ValueError, IndexError):
+                continue
+            if len(fields) >= 8:
+                rows.append(fields)
+            if len(rows) == count:
+                break
+        meta = {}
+        for index, fields in enumerate(rows, start=2):
+            # diameter ... height ... name (the final field is the turbine name)
+            style = _TURBINE_STYLES[(index - 2) % len(_TURBINE_STYLES)]
+            meta[index] = {
+                'name': fields[-1], 'height': float(fields[4]),
+                'radius': float(fields[0]) / 2.0, **style
+            }
+        if meta:
+            return meta
+    except (OSError, ValueError, IndexError):
+        pass
+    return {}
+
+
+def _meta(turb_path=None):
+    return _load_turbine_meta(turb_path)
 
 
 
@@ -39,8 +81,9 @@ def _get_moga_objectives():
     try:
         with open('./inputs/config.inp', 'r') as f:
             lines = f.readlines()
-            obj1_id = int(lines[9].strip())
-            obj2_id = int(lines[10].strip())
+            # config order: ... workability, mode, objective 1, objective 2
+            obj1_id = int(lines[10].strip())
+            obj2_id = int(lines[11].strip())
             return mapping[obj1_id], mapping[obj2_id]
     except Exception:
         return mapping[2], mapping[3] # Fallback
@@ -171,14 +214,14 @@ def _read_mesh_and_bathymetry():
         
     return np.column_stack((x_coords, y_coords, z_coords))
 
-def _get_turbine_dimensions(t_type, turb_path):
-    """Helper: Attempts to extract dimensions from file, falls back to defaults."""
-    meta = TURBINE_META.get(t_type, {'name': 'Generic', 'height': 120.0, 'color': 'gray'})
+def _get_turbine_dimensions(t_type, turb_path=None):
+    """Return dimensions and display name for the turbine encoded by a gene."""
+    meta = _meta(turb_path).get(t_type, {'name': f'Turbine {t_type}', 'height': 120.0, 'color': 'gray', 'radius': 60.0})
     hub_height = meta.get('height', 120.0)
     
     # Mathematical assumption: Rotor diameter is typically ~1.5x to 1.8x the hub height.
     # If we have a specific radius stored, use it. Otherwise approximate based on height.
-    rotor_radius = meta.get('radius', hub_height * 0.75) 
+    rotor_radius = meta.get('radius', hub_height * 0.75)
     
     # If the user passed a valid file, we could parse it here using pandas.
     # For now, we apply realistic proportionality based on meta data.
@@ -186,6 +229,7 @@ def _get_turbine_dimensions(t_type, turb_path):
 
 def _plot_farm_solution(plotter, subplot_index, title, nodes_xyz, genes, z_scale=5.0, turb_path=None):
     """Renders a farm layout with customizable UI elements, Ghost Box framing, and decoupled Z-scaling."""
+    turbine_meta = _meta(turb_path)
     plotter.subplot(0, subplot_index)
     
     # ====================================================================
@@ -236,7 +280,7 @@ def _plot_farm_solution(plotter, subplot_index, title, nodes_xyz, genes, z_scale
 
     # Draw Turbines
     for node_idx, t_type in enumerate(genes):
-        if t_type > 1 and t_type in TURBINE_META:
+        if t_type > 1 and t_type in turbine_meta:
             x, y, true_z = nodes_xyz[node_idx]
             hub_height, true_rotor_radius, color, name = _get_turbine_dimensions(t_type, turb_path)
             
@@ -341,15 +385,15 @@ def generate_3d_comparison(user_idx=0, z_scale=5.0, turb_path=None):
 # =====================================================================
 # MODULE 3: MATPLOTLIB ANIMATION
 # =====================================================================
-def _get_height_mapping():
-    """Helper: Maps height level index to physical height."""
+def _get_height_mapping(turb_path=None):
+    """Map animation level indices to heights in turbine-spec order."""
     heights_seen = []
-    for t_type in sorted(TURBINE_META.keys()):
-        h = TURBINE_META[t_type]['height']
+    for t_type in sorted(_meta(turb_path).keys()):
+        h = _meta(turb_path)[t_type]['height']
         if h not in heights_seen: heights_seen.append(h)
     return {i+1: h for i, h in enumerate(heights_seen)}
 
-def generate_mp4_animation(file_path, level_idx=1, fast_mode=False, frame_step=1, fps=10):
+def generate_mp4_animation(file_path, level_idx=1, fast_mode=False, frame_step=1, fps=10, turb_path=None):
     """Generates an MP4 animation with user-defined frame skipping, FPS, and perfect centering."""
     if not os.path.exists(file_path):
         print(f"Error: {file_path} not found.")
@@ -363,6 +407,7 @@ def generate_mp4_animation(file_path, level_idx=1, fast_mode=False, frame_step=1
     if ffmpeg_exe:
         mpl.rcParams['animation.ffmpeg_path'] = ffmpeg_exe
 
+    turbine_meta = _meta(turb_path)
     print(f"Reading animation data from {os.path.basename(file_path)} for Level {level_idx}...")
     df_anim = pd.read_csv(file_path)
     
@@ -395,16 +440,16 @@ def generate_mp4_animation(file_path, level_idx=1, fast_mode=False, frame_step=1
     t0_data = df_anim[df_anim['time'] == times[0]].copy().reset_index(drop=True)
     turbines = []
     for node_idx, t_type in enumerate(genes):
-        if t_type > 1 and t_type in TURBINE_META:
+        if t_type > 1 and t_type in turbine_meta:
             turbines.append({
                 'x': t0_data.loc[node_idx, 'x'],
                 'y': t0_data.loc[node_idx, 'y'],
                 'type': t_type,
-                'height': TURBINE_META[t_type]['height']
+                'height': turbine_meta[t_type]['height']
             })
     df_turbines = pd.DataFrame(turbines)
 
-    level_to_height = _get_height_mapping()
+    level_to_height = _get_height_mapping(turb_path)
     height_val = level_to_height[level_idx]
     u_col, v_col, mag_col = f'u_{level_idx}', f'v_{level_idx}', f'mag_{level_idx}'
     
@@ -433,7 +478,7 @@ def generate_mp4_animation(file_path, level_idx=1, fast_mode=False, frame_step=1
 
     # Plot Static Turbines
     legend_elements = []
-    for t_type, meta in TURBINE_META.items():
+    for t_type, meta in turbine_meta.items():
         subset = df_turbines[df_turbines['type'] == t_type]
         if subset.empty: continue
             
@@ -609,7 +654,7 @@ def generate_soga_3d_layout(target_obj="Cost", z_scale=5.0, turb_path=None):
     _plot_farm_solution(plotter, 0, f"SOGA Champion ({target_obj}: {fitness_val:,.2f})", nodes_xyz, genes, z_scale, turb_path)
     plotter.show()
 
-def generate_soga_mp4_animation(file_path='./outputs/animation_data_soga.csv', level_idx=1, frame_step=1, fps=10):
+def generate_soga_mp4_animation(file_path='./outputs/animation_data_soga.csv', level_idx=1, frame_step=1, fps=10, turb_path=None):
     """Generates an MP4 animation for the SOGA Champion with centering and frame skipping."""
     if not os.path.exists(file_path):
         print(f"Error: {file_path} not found.")
@@ -622,6 +667,7 @@ def generate_soga_mp4_animation(file_path='./outputs/animation_data_soga.csv', l
     if ffmpeg_exe:
         mpl.rcParams['animation.ffmpeg_path'] = ffmpeg_exe
 
+    turbine_meta = _meta(turb_path)
     print(f"Reading SOGA animation data for Level {level_idx}...")
     df_anim = pd.read_csv(file_path)
     
@@ -639,16 +685,16 @@ def generate_soga_mp4_animation(file_path='./outputs/animation_data_soga.csv', l
     t0_data = df_anim[df_anim['time'] == times[0]].copy().reset_index(drop=True)
     turbines = []
     for node_idx, t_type in enumerate(genes):
-        if t_type > 1 and t_type in TURBINE_META:
+        if t_type > 1 and t_type in turbine_meta:
             turbines.append({
                 'x': t0_data.loc[node_idx, 'x'],
                 'y': t0_data.loc[node_idx, 'y'],
                 'type': t_type,
-                'height': TURBINE_META[t_type]['height']
+                'height': turbine_meta[t_type]['height']
             })
     df_turbines = pd.DataFrame(turbines)
 
-    level_to_height = _get_height_mapping()
+    level_to_height = _get_height_mapping(turb_path)
     height_val = level_to_height[level_idx]
     u_col, v_col, mag_col = f'u_{level_idx}', f'v_{level_idx}', f'mag_{level_idx}'
     
@@ -671,7 +717,7 @@ def generate_soga_mp4_animation(file_path='./outputs/animation_data_soga.csv', l
     triang = Triangulation(t0_data['x'], t0_data['y'])
 
     legend_elements = []
-    for t_type, meta in TURBINE_META.items():
+    for t_type, meta in turbine_meta.items():
         subset = df_turbines[df_turbines['type'] == t_type]
         if subset.empty: continue
             
