@@ -879,8 +879,10 @@ def plot_wind_rose(json_path="./inputs/wind_analytics.json"):
     )
     
     plt.tight_layout()
-    plt.show(block=False)  
-    return True
+    output_path = os.path.join(os.path.dirname(json_path) or '.', 'wind_rose.png')
+    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    return output_path
 
 
 def plot_wind_speed_diagnostics(json_path="./inputs/wind_analytics.json"):
@@ -963,5 +965,7 @@ def plot_wind_speed_diagnostics(json_path="./inputs/wind_analytics.json"):
     ax.legend(fontsize=10, loc=LEGEND_LOC)
 
     plt.tight_layout()
-    plt.show(block=False)
-    return True
+    output_path = os.path.join(os.path.dirname(json_path) or '.', 'wind_speed_diagnostics.png')
+    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    return output_path

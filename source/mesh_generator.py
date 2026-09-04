@@ -147,14 +147,14 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
             text=True
         )
         
-        output_callback("Mesh generation successful. Cleaning up temporary files...")
+        output_callback("Mesh generation successful. Temporary files are being preserved.")
 
-        # Cleanup routine
-        files_to_remove = [mesh_input_file, 'windfarm_2.plt', 'polygon_project.txt', 't', 't2.dat', 'geom3.dat']
-        for file in files_to_remove:
-            if os.path.exists(file):
-                os.remove(file)
-                
+        # Temporarily disabled to preserve mesh-generator inputs and outputs for inspection.
+        # files_to_remove = [mesh_input_file, 'windfarm_2.plt', 'polygon_project.txt', 't', 't2.dat', 'geom3.dat']
+        # for file in files_to_remove:
+        #     if os.path.exists(file):
+        #         os.remove(file)
+
         output_callback("--- Mesh Pipeline Complete ---")
         
         

@@ -1426,13 +1426,26 @@ class OWFLOGui(ctk.CTk):
     # =====================================================================
     # WIND RESOURCE VISUALIZATION CALLBACK CONNECTIONS
     # =====================================================================
+    def _open_visualization_file(self, file_path):
+        """Open a saved plot without requiring Matplotlib GUI support."""
+        try:
+            if sys.platform == "win32":
+                os.startfile(os.path.normpath(file_path))
+            elif sys.platform == "darwin":
+                subprocess.run(["open", file_path], check=False)
+            else:
+                subprocess.run(["xdg-open", file_path], check=False)
+        except Exception as exc:
+            self.log(f"Plot saved, but could not open it automatically: {exc}")
+
     def plot_wind_rose(self):
         """Triggers the directional polar frequency mesh engine."""
         self.log("🧭 Extracting joint probability matrix distributions...")
         # Invokes interactive backend context parsing from visualizer_15.py
         success = visualizer.plot_wind_rose(json_path="./inputs/wind_analytics.json")
         if success:
-            self.log("🎉 Directional polar wind rose rendering loop initialized successfully.")
+            self.log(f"🎉 Wind rose saved to {success}")
+            self._open_visualization_file(success)
         else:
             self.log("🔴 ERROR: Unable to load or parse path destination structural matrices.")
 
@@ -1442,7 +1455,8 @@ class OWFLOGui(ctk.CTk):
         # Invokes the unified graphics plot context mapping both data parameters
         success = visualizer.plot_wind_speed_diagnostics(json_path="./inputs/wind_analytics.json")
         if success:
-            self.log("🎉 Consolidated wind speed diagnostics window spawned successfully.")
+            self.log(f"🎉 Wind speed histogram saved to {success}")
+            self._open_visualization_file(success)
         else:
             self.log("🔴 ERROR: Failed to decode target distribution profile parameters.")
     # =====================================================================
@@ -1481,5 +1495,9 @@ class OWFLOGui(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 if __name__ == "__main__":
+    # Adjust UI scaling for Linux HiDPI displays
+    if sys.platform.startswith("linux"):
+        ctk.set_widget_scaling(1.5)  # Try 1.2, 1.25, or 1.5 depending on your monitor
+        ctk.set_window_scaling(1.5)  # Scales the base window dimensions proportionally
     app = OWFLOGui()
     app.mainloop()
