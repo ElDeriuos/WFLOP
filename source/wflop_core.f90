@@ -1387,6 +1387,7 @@ CONTAINS
         INTEGER  :: i, j_node, j_type
         REAL(wp) :: ti_local, u_inflow, norm_deficit, a_induction
         REAL(wp) :: r_wake, a_overlap, a_rotor, i_plus_unweighted
+        REAL(wp) :: radial_dist
 
         deficit_u = 0.0_wp
         added_i   = 0.0_wp
@@ -1419,13 +1420,13 @@ CONTAINS
             x_rot =  dx * COS(theta) + dy * SIN(theta)
             y_rot = -dx * SIN(theta) + dy * COS(theta)
 
-            ! radial_dist = ABS(y_rot)
+            radial_dist = ABS(y_rot)
             ! x_rel = MAX(x_rot, 0.0_wp)
 
 
             !IF (x_rel > 1.0_wp .AND. radial_dist < (3.0_wp * d_wake)) THEN
             ! Downstream check (strictly downwind: x_rot > 1.0 m)
-            IF (x_rot > 1.0_wp) THEN
+            IF (x_rot > 1.0_wp .AND. radial_dist < (6.0_wp * d_wake)) THEN
                 ! Velocity Deficit (Bastankhah Gaussian)
                 sigma_d0 = (k_star * x_rot / d_wake) + (0.2_wp * SQRT(beta))
                 sigma = sigma_d0 * d_wake
@@ -1598,7 +1599,7 @@ CONTAINS
 
             radial_dist = ABS(y_rot)
 
-            IF (x_rot > 1.0_wp) THEN
+            IF (x_rot > 1.0_wp .AND. radial_dist < (6.0_wp * d_wake)) THEN
                 sigma_d0 = (k_star * x_rot / d_wake) + (0.2_wp * SQRT(beta))
                 a1 = m_ct / (8.0_wp * (sigma_d0**2))
                 IF (a1 >= 1.0_wp) a1 = 0.999_wp
@@ -2342,7 +2343,7 @@ CONTAINS
 
         ! Temporary arrays for the currently evaluated front
         INTEGER, ALLOCATABLE  :: front_idx(:)
-        REAL(wp), ALLOCATABLE :: obj_values(:)
+        REAL(wp), ALLOCATABLE :: sorted_vals(:)
         INTEGER :: front_size, f_i
 
         n_pop = SIZE(pop%inds)
@@ -2355,7 +2356,7 @@ CONTAINS
         ! Find the worst rank to know how many fronts to process
         max_rank = MAXVAL(pop%inds(:)%rank)
 
-        ALLOCATE(front_idx(n_pop), obj_values(n_pop))
+        ALLOCATE(front_idx(n_pop), sorted_vals(n_pop))
 
         ! 2. Process one Front at a time
         DO current_front = 1, max_rank
@@ -2380,40 +2381,66 @@ CONTAINS
             ! 3. Process each objective independently
             DO m = 1, config%n_obj
 
-                ! --- OLD SCRIPT OPTIMIZATION: Extract to 1D Array ---
-                DO f_i = 1, front_size
-                    obj_values(f_i) = pop%inds(front_idx(f_i))%obj_vals(m)
-                END DO
+                CALL sort_front_by_objective(pop, front_idx(1:front_size), m)
 
-                ! Sort the front_idx array based on these extracted values
-                CALL sort_indices_by_values(obj_values(1:front_size), front_idx(1:front_size))
+                DO f_i = 1, front_size
+                    sorted_vals(f_i) = pop%inds(front_idx(f_i))%obj_vals(m)
+                END DO
 
                 ! Set boundaries of this sorted list to infinity
                 pop%inds(front_idx(1))%distance          = HUGE(1.0_wp)
                 pop%inds(front_idx(front_size))%distance = HUGE(1.0_wp)
 
-                obj_min = obj_values(1)
-                obj_max = obj_values(front_size)
+                obj_min = sorted_vals(1)
+                obj_max = sorted_vals(front_size)
                 f_range = obj_max - obj_min
 
                 ! Calculate normalized distance for intermediate individuals
-                IF (f_range > 1.0E-6_wp) THEN
+                IF (f_range > 1.0E-9_wp) THEN
                     DO f_i = 2, front_size - 1
                         pop%inds(front_idx(f_i))%distance = pop%inds(front_idx(f_i))%distance + &
-                            (obj_values(f_i+1) - obj_values(f_i-1)) / f_range
+                            (sorted_vals(f_i + 1) - sorted_vals(f_i - 1)) / f_range
                     END DO
                 END IF
             END DO
         END DO
-        DEALLOCATE(front_idx, obj_values)
+        DEALLOCATE(front_idx, sorted_vals)
     END SUBROUTINE calculate_crowding_distance
 
     ! ==================================================================
     ! HELPER: Insertion Sort (Optimized with contiguous 1D array)
     ! ==================================================================
-    SUBROUTINE sort_indices_by_values(values, idx_array)
-        REAL(wp), INTENT(IN)    :: values(:)
-        INTEGER,  INTENT(INOUT) :: idx_array(:)
+    ! SUBROUTINE sort_indices_by_values(values, idx_array)
+    !     REAL(wp), INTENT(IN)    :: values(:)
+    !     INTEGER,  INTENT(INOUT) :: idx_array(:)
+
+    !     INTEGER  :: i, j, temp_idx, n
+    !     REAL(wp) :: temp_val
+
+    !     n = SIZE(idx_array)
+    !     DO i = 2, n
+    !         temp_idx = idx_array(i)
+    !         temp_val = values(i)
+    !         j = i - 1
+
+    !         ! Shift elements that are greater than temp_val to the right
+    !         DO WHILE (j >= 1)
+    !             IF (values(j) > temp_val) THEN
+    !                 idx_array(j + 1) = idx_array(j)
+    !                 ! Note: We don't actually swap the 'values' array because
+    !                 ! we only care about sorting the indices based on the values.
+    !                 j = j - 1
+    !             ELSE
+    !                 EXIT
+    !             END IF
+    !         END DO
+    !         idx_array(j + 1) = temp_idx
+    !     END DO
+    ! END SUBROUTINE sort_indices_by_values
+    SUBROUTINE sort_front_by_objective(pop, idx_array, obj_idx)
+        TYPE(Population), INTENT(IN)    :: pop
+        INTEGER,          INTENT(INOUT) :: idx_array(:)
+        INTEGER,          INTENT(IN)    :: obj_idx
 
         INTEGER  :: i, j, temp_idx, n
         REAL(wp) :: temp_val
@@ -2421,15 +2448,12 @@ CONTAINS
         n = SIZE(idx_array)
         DO i = 2, n
             temp_idx = idx_array(i)
-            temp_val = values(i)
+            temp_val = pop%inds(temp_idx)%obj_vals(obj_idx)
             j = i - 1
 
-            ! Shift elements that are greater than temp_val to the right
             DO WHILE (j >= 1)
-                IF (values(j) > temp_val) THEN
+                IF (pop%inds(idx_array(j))%obj_vals(obj_idx) > temp_val) THEN
                     idx_array(j + 1) = idx_array(j)
-                    ! Note: We don't actually swap the 'values' array because
-                    ! we only care about sorting the indices based on the values.
                     j = j - 1
                 ELSE
                     EXIT
@@ -2437,7 +2461,7 @@ CONTAINS
             END DO
             idx_array(j + 1) = temp_idx
         END DO
-    END SUBROUTINE sort_indices_by_values
+    END SUBROUTINE sort_front_by_objective
 
     ! ==================================================================
     ! FUNCTION: tournament_select

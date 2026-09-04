@@ -20,7 +20,7 @@ CONTAINS
         TYPE(Individual) :: ind
         INTEGER :: f_in, ios, row_number, n_fields, n_genes, i, j, n_selected
         INTEGER, ALLOCATABLE :: gene_columns(:), fields_gene(:)
-        CHARACTER(LEN=2048) :: line
+        CHARACTER(LEN=65536) :: line
         CHARACTER(LEN=512), ALLOCATABLE :: fields(:)
         LOGICAL :: header_found, selected, first_output
         INTEGER :: f_ts, f_summary, f_turbines, f_json
