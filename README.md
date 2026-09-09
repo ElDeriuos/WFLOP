@@ -67,7 +67,6 @@ The GUI runs long preprocessing, compilation, optimization, and rendering action
 | `inputs/` | Generated and user-supplied Fortran input files. |
 | `outputs/` | Optimization, simulation, plots, and animation outputs. |
 | `tests/` | Python tests for the wake-model implementation. |
-| `thesis_ver5.pdf` | Thesis draft describing the research model and case-study methodology. |
 
 The checked-in `source/` directory may contain prebuilt binaries and object files. Rebuilding is recommended when changing compilers, platforms, or Fortran sources.
 
@@ -426,11 +425,6 @@ LCOE = raw_cost / (raw_aep_gwh × 25 years)
 
 This is a simplified lifetime-energy ratio. The current implementation does not provide a complete discounted cash-flow, OPEX, failure, maintenance, or decommissioning model.
 
-### 6.7 Thesis methodology versus current implementation
-
-The thesis draft presents Nash Bargaining Theory as a way to select a balanced compromise from a Pareto front. The current repository writes the complete non-dominated front and offers plots/3-D views, but it does **not** contain a dedicated Nash-bargaining selector. Any compromise selection must therefore be performed externally or added as a future post-processing feature.
-
-Likewise, the thesis reports case-study results for a Persian Gulf site and a 2000–2024 wind period. Those values describe the draft study; they are not guaranteed by the code for arbitrary inputs.
 
 ---
 
