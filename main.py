@@ -175,13 +175,13 @@ class OWFLOGui(ctk.CTk):
         comp_frame.pack(fill="x", padx=10, pady=(15, 0), side="bottom")
 
         self.btn_compile_soga_debug = ctk.CTkButton(
-            comp_frame, text="⚙️ Compile SOGA (Debug)", fg_color="#b8860b", hover_color="#8a6508",
+            comp_frame, text="Compile SOGA (Debug)", fg_color="#b8860b", hover_color="#8a6508",
             command=lambda: self.run_compiler("debug", "soga")
         )
         self.btn_compile_soga_debug.pack(side="left", expand=True, fill="x", padx=(0, 5))
 
         self.btn_compile_soga_fast = ctk.CTkButton(
-            comp_frame, text="🚀 Compile SOGA (Fast)", fg_color="#b22222", hover_color="#8b1a1a",
+            comp_frame, text="Compile SOGA (Fast)", fg_color="#b22222", hover_color="#8b1a1a",
             command=lambda: self.run_compiler("fast", "soga")
         )
         self.btn_compile_soga_fast.pack(side="left", expand=True, fill="x", padx=(5, 0))
@@ -194,7 +194,7 @@ class OWFLOGui(ctk.CTk):
         plot_row = ctk.CTkFrame(viz_frame_soga, fg_color="transparent")
         plot_row.pack(fill="x", pady=(0, 5))
 
-        self.btn_soga_plot = ctk.CTkButton(plot_row, text="📈 Plot Convergence History", state="normal", command=self.plot_soga_convergence)
+        self.btn_soga_plot = ctk.CTkButton(plot_row, text="Plot Convergence History", state="normal", command=self.plot_soga_convergence)
         self.btn_soga_plot.pack(side="left", padx=(0, 10), expand=True, fill="x")
 
         # --- NEW: Z-Scale Entry ---
@@ -203,7 +203,7 @@ class OWFLOGui(ctk.CTk):
         self.soga_z_scale.insert(0, "5.0")
         self.soga_z_scale.pack(side="left", padx=(0, 5))
 
-        self.btn_soga_3d = ctk.CTkButton(plot_row, text="🌐 View Best 3D Layout", state="normal", command=self.plot_soga_3d)
+        self.btn_soga_3d = ctk.CTkButton(plot_row, text="View Best 3D Layout", state="normal", command=self.plot_soga_3d)
         self.btn_soga_3d.pack(side="left", expand=True, fill="x")
 
         # Row 2: Animation & Dynamic Height Selection
@@ -226,7 +226,7 @@ class OWFLOGui(ctk.CTk):
         self.soga_anim_fps.insert(0, "10")
         self.soga_anim_fps.pack(side="left", padx=(0, 10))
 
-        self.btn_soga_anim = ctk.CTkButton(anim_row, text="🎬 Generate MP4 Flow", state="normal", command=self.generate_soga_animation)
+        self.btn_soga_anim = ctk.CTkButton(anim_row, text="Generate MP4 Flow", state="normal", command=self.generate_soga_animation)
         self.btn_soga_anim.pack(side="left", expand=True, fill="x")
 
     def build_moga_tab(self):
@@ -296,13 +296,13 @@ class OWFLOGui(ctk.CTk):
         comp_frame.pack(fill="x", padx=10, pady=(15, 0), side="bottom")
 
         self.btn_compile_moga_debug = ctk.CTkButton(
-            comp_frame, text="⚙️ Compile MOGA (Debug)", fg_color="#b8860b", hover_color="#8a6508",
+            comp_frame, text="Compile (Debug)", fg_color="#b8860b", hover_color="#8a6508",
             command=lambda: self.run_compiler("debug", "moga")
         )
         self.btn_compile_moga_debug.pack(side="left", expand=True, fill="x", padx=(0, 5))
 
         self.btn_compile_moga_fast = ctk.CTkButton(
-            comp_frame, text="🚀 Compile MOGA (Fast)", fg_color="#b22222", hover_color="#8b1a1a",
+            comp_frame, text="Compile (Fast)", fg_color="#b22222", hover_color="#8b1a1a",
             command=lambda: self.run_compiler("fast", "moga")
         )
         self.btn_compile_moga_fast.pack(side="left", expand=True, fill="x", padx=(5, 0))
@@ -311,7 +311,7 @@ class OWFLOGui(ctk.CTk):
         plot_row = ctk.CTkFrame(viz_frame_moga, fg_color="transparent")
         plot_row.pack(fill="x", pady=(0, 5))
 
-        self.btn_moga_pareto = ctk.CTkButton(plot_row, text="📊 Plot Pareto Front", state="normal", command=self.plot_moga_pareto)
+        self.btn_moga_pareto = ctk.CTkButton(plot_row, text="Plot Pareto Front", state="normal", command=self.plot_moga_pareto)
         self.btn_moga_pareto.pack(side="left", padx=(0, 10), expand=True, fill="x")
 
         # --- NEW: Z-Scale Entry ---
@@ -320,7 +320,7 @@ class OWFLOGui(ctk.CTk):
         self.moga_z_scale.insert(0, "5.0")
         self.moga_z_scale.pack(side="left", padx=(0, 5))
 
-        self.btn_moga_3d = ctk.CTkButton(plot_row, text="🌐 View Extreme 3D Layouts", state="normal", command=self.plot_moga_3d)
+        self.btn_moga_3d = ctk.CTkButton(plot_row, text="View Extreme 3D Layouts", state="normal", command=self.plot_moga_3d)
         self.btn_moga_3d.pack(side="left", expand=True, fill="x")
 
         # Row 2: Animation Settings & Button (All on one line)
@@ -345,7 +345,7 @@ class OWFLOGui(ctk.CTk):
         self.moga_anim_fps.insert(0, "10")
         self.moga_anim_fps.pack(side="left", padx=(0, 10))
 
-        self.btn_moga_anim = ctk.CTkButton(anim_row, text="🎬 Generate Flow Animation", state="normal", command=self.generate_moga_animation)
+        self.btn_moga_anim = ctk.CTkButton(anim_row, text="Generate Flow Animation", state="normal", command=self.generate_moga_animation)
         self.btn_moga_anim.pack(side="left", expand=True, fill="x")
 
     def build_farm_setup_tab(self):
