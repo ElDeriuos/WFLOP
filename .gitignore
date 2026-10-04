@@ -42,3 +42,4 @@ outputs/*
 
 # PyInstaller output
 dist/
+selftest.log

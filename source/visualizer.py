@@ -10,7 +10,11 @@ import matplotlib.animation as animation
 from matplotlib.tri import Triangulation
 from scipy.stats import weibull_min
 import pyvista as pv
-import ffmpeg
+import imageio_ffmpeg
+
+# MP4 export uses the ffmpeg binary shipped inside the imageio-ffmpeg package,
+# so users need no system ffmpeg (set IMAGEIO_FFMPEG_EXE to use another one).
+matplotlib.rcParams['animation.ffmpeg_path'] = imageio_ffmpeg.get_ffmpeg_exe()
 
 # =====================================================================
 # CONFIGURATION & METADATA
@@ -400,14 +404,6 @@ def generate_mp4_animation(file_path, level_idx=1, fast_mode=False, frame_step=1
         print(f"Error: {file_path} not found.")
         return None
 
-    import matplotlib as mpl
-    import shutil
-    
-    # Ensure FFmpeg path is set correctly based on your previous fixes
-    ffmpeg_exe = shutil.which("ffmpeg")
-    if ffmpeg_exe:
-        mpl.rcParams['animation.ffmpeg_path'] = ffmpeg_exe
-
     turbine_meta = _meta(turb_path)
     print(f"Reading animation data from {os.path.basename(file_path)} for Level {level_idx}...")
     df_anim = pd.read_csv(file_path)
@@ -660,13 +656,6 @@ def generate_soga_mp4_animation(file_path='./outputs/animation_data_soga.csv', l
     if not os.path.exists(file_path):
         print(f"Error: {file_path} not found.")
         return None
-
-    import matplotlib as mpl
-    import shutil
-    
-    ffmpeg_exe = shutil.which("ffmpeg")
-    if ffmpeg_exe:
-        mpl.rcParams['animation.ffmpeg_path'] = ffmpeg_exe
 
     turbine_meta = _meta(turb_path)
     print(f"Reading SOGA animation data for Level {level_idx}...")

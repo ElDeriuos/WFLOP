@@ -7,6 +7,7 @@
 # outputs/, source/ and build/ folders the app reads and writes at runtime.
 
 import os
+import re
 import shutil
 import sys
 
@@ -30,6 +31,42 @@ a = Analysis(
     hiddenimports=hiddenimports,
     excludes=["pytest", "hypothesis", "fortls"],
 )
+
+# VTK: the wheel ships ~630 MB of libraries, but the 3D viewer only loads the
+# modules below (recorded from /proc/<pid>/maps while the viewers ran onscreen
+# and offscreen). Everything else in vtkmodules is dropped. `WFLOP --self-test`
+# renders with the real viewer code, so a missing module fails the release build.
+VTK_KEEP = {
+    "vtkChartsCore", "vtkCommonColor", "vtkCommonComputationalGeometry", "vtkCommonCore",
+    "vtkCommonDataModel", "vtkCommonExecutionModel", "vtkCommonMath", "vtkCommonMisc",
+    "vtkCommonSystem", "vtkCommonTransforms", "vtkDICOMParser", "vtkFiltersCellGrid",
+    "vtkFiltersCore", "vtkFiltersExtraction", "vtkFiltersGeneral", "vtkFiltersGeometry",
+    "vtkFiltersHybrid", "vtkFiltersHyperTree", "vtkFiltersModeling", "vtkFiltersPython",
+    "vtkFiltersReduction", "vtkFiltersSources", "vtkFiltersStatistics", "vtkFiltersTexture",
+    "vtkFiltersVerdict", "vtkIOCellGrid", "vtkIOCore", "vtkIOImage", "vtkIOLegacy",
+    "vtkIOXML", "vtkIOXMLParser", "vtkImagingColor", "vtkImagingCore", "vtkImagingGeneral",
+    "vtkImagingHybrid", "vtkImagingMath", "vtkImagingSources", "vtkInfovisCore",
+    "vtkInteractionStyle", "vtkInteractionWidgets", "vtkParallelCore", "vtkParallelDIY",
+    "vtkPythonContext2D", "vtkRenderingAnnotation", "vtkRenderingContext2D",
+    "vtkRenderingCore", "vtkRenderingFreeType", "vtkRenderingHyperTreeGrid",
+    "vtkRenderingMatplotlib", "vtkRenderingOpenGL2", "vtkRenderingUI", "vtkRenderingVolume",
+    "vtkRenderingVolumeOpenGL2", "vtkViewsContext2D", "vtkViewsCore",
+    "vtkWrappingPythonCore", "vtkexpat", "vtkfmt", "vtkfreetype", "vtkglad", "vtkjpeg",
+    "vtkkissfft", "vtkloguru", "vtklz4", "vtklzma", "vtkmetaio", "vtkpng", "vtkpugixml",
+    "vtkscn", "vtksys", "vtktiff", "vtktoken", "vtkverdict", "vtkx11", "vtkzlib",
+}
+_VTK_STEM = re.compile(r"^(?:lib)?([A-Za-z][A-Za-z0-9_]*?)(?:\d\.\d+)?(?:-[\d.]+)?\.(?:cpython|cp\d|so|dll|pyd|dylib)")
+
+
+def _keep_binary(dest):
+    parts = dest.replace("\\", "/").split("/")
+    if "vtkmodules" not in parts:
+        return True
+    m = _VTK_STEM.match(parts[-1])
+    return m is None or m.group(1) in VTK_KEEP
+
+
+a.binaries = [b for b in a.binaries if _keep_binary(b[0])]
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -41,7 +78,9 @@ exe = EXE(
     console=False,
 )
 
-coll = COLLECT(exe, a.binaries, a.datas, name="WFLOP")
+# Linux libraries ship with debug symbols (libvtkCommonCore: 150 MB -> 87 MB stripped).
+# Not on macOS (would invalidate code signatures) or Windows (no symbols in DLLs).
+coll = COLLECT(exe, a.binaries, a.datas, strip=sys.platform.startswith("linux"), name="WFLOP")
 
 # ---------------------------------------------------------------------------
 # Runtime folders: the app works relative to its own folder (see main.py).
