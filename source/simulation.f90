@@ -38,10 +38,10 @@ CONTAINS
 
         CALL execute_command_line('mkdir -p "' // TRIM(config%out_dir) // '"')
         OPEN(NEWUNIT=f_in, FILE=solution_filename, STATUS='OLD', ACTION='READ', IOSTAT=ios)
-        IF (ios /= 0) STOP 'ERROR: Could not open solution CSV.'
+        IF (ios /= 0) ERROR STOP 'ERROR: Could not open solution CSV.'
 
         READ(f_in, '(A)', IOSTAT=ios) line
-        IF (ios /= 0) STOP 'ERROR: Solution CSV has no header.'
+        IF (ios /= 0) ERROR STOP 'ERROR: Solution CSV has no header.'
         CALL split_csv(line, fields, n_fields)
         ALLOCATE(gene_columns(site%n_nodes))
         gene_columns = 0
@@ -53,8 +53,42 @@ CONTAINS
             END IF
         END DO
         IF (n_genes < site%n_nodes) THEN
-            PRINT *, 'WARNING: solution CSV has fewer gene columns than mesh nodes; row skipped.'
+            PRINT *, 'ERROR: solution CSV has ', n_genes, ' gene columns but the mesh has ', site%n_nodes, ' nodes.'
+            ERROR STOP 1
         END IF
+
+        ! Validate every selected row before any output file is replaced
+        row_number = 0
+        DO
+            READ(f_in, '(A)', IOSTAT=ios) line
+            IF (ios /= 0) EXIT
+            IF (LEN_TRIM(line) == 0) CYCLE
+            row_number = row_number + 1
+            IF (.NOT. row_is_selected(row_number, selected_rows)) CYCLE
+            CALL split_csv(line, fields, n_fields)
+            n_turb = 0
+            DO i = 1, site%n_nodes
+                j = -1
+                IF (gene_columns(i) <= n_fields) READ(fields(gene_columns(i)), *, IOSTAT=ios) j
+                IF (ios /= 0 .OR. j < 1 .OR. j > site%n_types) THEN
+                    PRINT *, 'ERROR: invalid turbine type in source row ', row_number, ', gene_', i
+                    ERROR STOP 1
+                END IF
+                IF (j > 1) n_turb = n_turb + 1
+            END DO
+            IF (n_turb == 0) THEN
+                PRINT *, 'ERROR: source row ', row_number, ' contains no turbines.'
+                ERROR STOP 1
+            END IF
+        END DO
+        DO i = 1, SIZE(selected_rows)
+            IF (selected_rows(i) > row_number) THEN
+                PRINT *, 'ERROR: requested row ', selected_rows(i), ' but the CSV has only ', row_number, ' data rows.'
+                ERROR STOP 1
+            END IF
+        END DO
+        REWIND(f_in)
+        READ(f_in, '(A)') line
 
         OPEN(NEWUNIT=f_ts, FILE=TRIM(config%out_dir)//'simulation_farm_timeseries.csv', STATUS='REPLACE')
         OPEN(NEWUNIT=f_summary, FILE=TRIM(config%out_dir)//'simulation_summary.csv', STATUS='REPLACE')
@@ -75,26 +109,12 @@ CONTAINS
             CALL split_csv(line, fields, n_fields)
             selected = row_is_selected(row_number, selected_rows)
             IF (.NOT. selected) CYCLE
-            IF (n_genes < site%n_nodes) THEN
-                PRINT *, 'WARNING: skipping malformed solution row ', row_number
-                CYCLE
-            END IF
 
             n_turb = 0
             DO i = 1, site%n_nodes
-                READ(fields(gene_columns(i)), *, IOSTAT=ios) j
-                IF (ios /= 0 .OR. j < 1 .OR. j > site%n_types) THEN
-                    PRINT *, 'WARNING: invalid turbine type in source row ', row_number, '; row skipped.'
-                    n_turb = -1
-                    EXIT
-                END IF
+                READ(fields(gene_columns(i)), *) j
                 IF (j > 1) n_turb = n_turb + 1
             END DO
-            IF (n_turb < 0) CYCLE
-            IF (n_turb == 0) THEN
-                PRINT *, 'WARNING: source row ', row_number, ' contains no turbines; row skipped.'
-                CYCLE
-            END IF
 
             ALLOCATE(ind%chromosome(site%n_nodes))
             DO i = 1, site%n_nodes

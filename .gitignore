@@ -17,12 +17,10 @@ build/
 *.o
 *.obj
 *.exe
-source/soga_optimizer
-source/moga_optimizer
-source/polygon3
 
 # Generated pipeline files (recreated by the GUI)
 inputs/config.inp
+inputs/simulation_config.inp
 inputs/farm_bathymetry.dat
 inputs/mesh_metadata.json
 inputs/windfarm_rocol.txt

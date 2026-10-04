@@ -126,11 +126,12 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
             f.write(f"{'windfarm_2.plt':<80}\n")
 
 
+    os.makedirs('./build', exist_ok=True)
     if sys.platform == "win32":
-        binary_path = './source/polygon3.exe'
+        binary_path = './build/polygon3.exe'
         output_callback("Executing polygon3 mesh generator natively in Windows...")
     else:
-        binary_path = './source/polygon3'
+        binary_path = './build/polygon3'
         output_callback("Executing polygon3 mesh generator natively in Linux/WSL...")
     
     # Build polygon3 on first use if no prebuilt binary is present
@@ -143,10 +144,10 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
                 check=True, capture_output=True, text=True
             )
         except FileNotFoundError:
-            output_callback("🔴 ERROR: 'gfortran' not found. Install gfortran and make sure it is on your PATH.")
+            output_callback("ERROR: 'gfortran' not found. Install gfortran and make sure it is on your PATH.")
             return None
         except subprocess.CalledProcessError as e:
-            output_callback(f"🔴 ERROR: compiling polygon3 failed:\n{e.stderr.strip()}")
+            output_callback(f"ERROR: compiling polygon3 failed:\n{e.stderr.strip()}")
             return None
 
     # Give the file executable permissions for the user (Handled gracefully by OS)
@@ -186,11 +187,11 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
         return metadata
         
     except FileNotFoundError:
-        output_callback("🔴 ERROR: Compiled './source/polygon3' executable not found in this directory.")
+        output_callback("ERROR: Compiled './build/polygon3' executable not found in this directory.")
         return None
     except subprocess.CalledProcessError as e:
         # EXPOSING THE REAL FORTRAN ERROR TO THE GUI
-        output_callback(f"🔴 ERROR: polygon3 failed with exit code {e.returncode}.")
+        output_callback(f"ERROR: polygon3 failed with exit code {e.returncode}.")
         if e.stdout:
             output_callback(f"Output: {e.stdout.strip()}")
         if e.stderr:

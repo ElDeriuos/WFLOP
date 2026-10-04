@@ -44,6 +44,82 @@ ctk.set_default_color_theme("dark-blue")
 # Monospace font for the live console, per platform
 MONO_FONT = {"win32": "Consolas", "darwin": "Menlo"}.get(sys.platform, "DejaVu Sans Mono")
 
+# config.inp is positional: one value per line, in the exact order read_gui_config
+# (source/wflop_core.f90) reads them. Fortran list-directed READ ignores the rest of
+# each line, so the trailing "! name: description" comments are safe.
+CONFIG_FIELDS = [
+    ("it_max", "GA: max generations (SOGA, MOGA)"),
+    ("n_pop", "GA: population size (SOGA, MOGA)"),
+    ("p_cross", "GA: crossover probability (SOGA, MOGA)"),
+    ("p_mut", "GA: mutation probability (SOGA, MOGA)"),
+    ("mu", "GA: mutation step (SOGA, MOGA)"),
+    ("max_turbs", "Farm: max turbines, hard limit (SOGA, MOGA)"),
+    ("min_turbs", "Farm: min turbines, hard limit (SOGA, MOGA)"),
+    ("soga_stall", "GA: generations without improvement before early stop, 0 = off (SOGA)"),
+    ("workability", "Farm: installation workability factor, affects CAPEX (all modes, simulator)"),
+    ("opt_mode", "Mode: 1 = SOGA, 2 = MOGA (NSGA-II)"),
+    ("obj_1", "Objective 1: 1 = min LCOE, 2 = min CAPEX, 3 = max AEP, 4 = max fatigue life"),
+    ("obj_2", "Objective 2, same codes; 0 when SOGA (MOGA only)"),
+    ("wind_mode", "Wind: 1 = time-series (wind1 file), 2 = wind rose (wind2 file); simulator forces 1"),
+    ("use_soft_constraints", "Soft constraints: 1 = on, 0 = off (SOGA, MOGA)"),
+    ("aep_min_soft", "Soft constraint: min AEP, 0 = off (SOGA, MOGA)"),
+    ("capex_max_soft", "Soft constraint: max CAPEX, 0 = off (SOGA, MOGA)"),
+    ("w_aep_soft", "Soft constraint: AEP penalty weight (SOGA, MOGA)"),
+    ("w_capex_soft", "Soft constraint: CAPEX penalty weight (SOGA, MOGA)"),
+    ("soft_penalty_power", "Soft constraint: penalty exponent (SOGA, MOGA)"),
+    ("f_turb", "File: turbine specification (all modes)"),
+    ("f_mesh", "File: mesh node coordinates (all modes)"),
+    ("f_wind1", "File: wind time series, filtered_wind.txt (wind_mode 1, simulator)"),
+    ("f_wind2", "File: wind rose matrix (wind_mode 2)"),
+    ("f_bathy", "File: farm bathymetry (all modes)"),
+    ("f_dist", "File: site distances to shore/grid/port (all modes)"),
+    ("out_dir", "Directory: outputs, must end with / (all modes)"),
+]
+CONFIG_PATH_FIELDS = {"f_turb", "f_mesh", "f_wind1", "f_wind2", "f_bathy", "f_dist", "out_dir"}
+
+
+def format_config(values):
+    """Renders config.inp text from a dict keyed by CONFIG_FIELDS names."""
+    lines = []
+    for key, comment in CONFIG_FIELDS:
+        value = values[key]
+        if key in CONFIG_PATH_FIELDS:
+            value = '"' + str(value).replace("\\", "/") + '"'
+        lines.append(f"{str(value):<40} ! {key}: {comment}")
+    return "\n".join(lines) + "\n"
+
+
+def simulator_config_values(turb, mesh, wind1, bathy, dist, out_dir, workability):
+    """Config values for a simulator-only run. The simulator ignores the GA, objective
+    and soft-constraint fields, so they get neutral placeholders."""
+    out_dir = out_dir.replace("\\", "/")
+    return {
+        "it_max": 1, "n_pop": 2, "p_cross": 0.5, "p_mut": 0.5, "mu": 0.08,
+        "max_turbs": 1, "min_turbs": 1, "soga_stall": 0, "workability": workability,
+        "opt_mode": 1, "obj_1": 1, "obj_2": 0, "wind_mode": 1,
+        "use_soft_constraints": 0, "aep_min_soft": 0.0, "capex_max_soft": 0.0,
+        "w_aep_soft": 0.0, "w_capex_soft": 0.0, "soft_penalty_power": 2.0,
+        "f_turb": turb, "f_mesh": mesh, "f_wind1": wind1, "f_wind2": "./inputs/wind_rose_matrix.dat",
+        "f_bathy": bathy, "f_dist": dist, "out_dir": out_dir if out_dir.endswith("/") else out_dir + "/",
+    }
+
+
+def fortran_exe(name):
+    """Path of a compiled Fortran program; every build path (GUI, Makefile) puts them in ./build."""
+    return os.path.join(os.getcwd(), "build", name + (".exe" if sys.platform == "win32" else ""))
+
+
+def build_simulator_command(exe_path, config_path, csv_path, rows):
+    """Builds the simulator argv. rows is 'all', blank, or 1-based rows like '1,4,7'."""
+    rows = rows.replace(" ", "")
+    if rows in ("", "all"):
+        return [exe_path, config_path, csv_path, "all"]
+    tokens = rows.split(",")
+    if not all(t.isdigit() and int(t) >= 1 for t in tokens):
+        raise ValueError(f"Invalid row selector: '{rows}'. Use 'all' or e.g. 1,4,7")
+    return [exe_path, config_path, csv_path, ",".join(tokens)]
+
+
 OBJ_MAPPING = {
     "Minimize LCOE": 1,
     "Minimize CAPEX": 2,
@@ -61,20 +137,24 @@ class OWFLOGui(ctk.CTk):
         self.title("OWFLO: Offshore Wind Farm Layout Optimizer")
         self.geometry("1400x850")
 
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=2)
+        # uniform keeps the split fixed, so the console has the same width on every tab
+        self.grid_columnconfigure(0, weight=1, uniform="panels")
+        self.grid_columnconfigure(1, weight=1, uniform="panels")
         self.grid_rowconfigure(0, weight=1)
 
         # =========================================================
         # LEFT PANEL: THE CONTROL CENTER (TABBED)
         # =========================================================
-        self.tabview = ctk.CTkTabview(self, corner_radius=10)
+        self.tabview = ctk.CTkTabview(self, corner_radius=10, command=self.on_tab_change)
         self.tabview.grid(row=0, column=0, padx=10, pady=(10, 10), sticky="nsew")
 
         self.tab_pre = self.tabview.add("Pre-Processing")
         self.tab_farm = self.tabview.add("Farm Setup")
-        self.tab_soga = self.tabview.add("SOGA (Single-Obj)")
-        self.tab_moga = self.tabview.add("NSGA-II (Multi-Obj)")
+        # Pre-Processing and Farm Setup build their own scrollable frames
+        self.tab_soga = self._scrollable_tab("SOGA (Single-Obj)")
+        self.tab_moga = self._scrollable_tab("NSGA-II (Multi-Obj)")
+        self.tab_sim = self._scrollable_tab("Simulator")
+        self.compile_buttons = {}
 
         # ---------------------------------------------------------
         # SHARED VARIABLES
@@ -118,7 +198,7 @@ class OWFLOGui(ctk.CTk):
         self.console_action_frame.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
 
         # Keep the Global Abort Button here
-        self.btn_abort = ctk.CTkButton(self.console_action_frame, text="⏹ Abort Execution", fg_color="#b22222", hover_color="#8b1a1a", state="disabled", command=self.abort_process)
+        self.btn_abort = ctk.CTkButton(self.console_action_frame, text="Abort Execution", fg_color="#b22222", hover_color="#8b1a1a", state="disabled", command=self.abort_process)
         self.btn_abort.pack(side="right")
 
         # =========================================================
@@ -129,10 +209,28 @@ class OWFLOGui(ctk.CTk):
         self.build_farm_setup_tab()
         self.build_soga_tab()
         self.build_moga_tab()
+        self.build_simulator_tab()
 
         # Run the validation once at startup so the MOGA dropdowns don't overlap
         self.enforce_unique_objectives(1)
         self._apply_objective_rules(1)
+
+    def _scrollable_tab(self, name):
+        """Adds a tab whose content scrolls when it is taller than the window."""
+        scroll = ctk.CTkScrollableFrame(self.tabview.add(name), fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        return scroll
+
+    def on_tab_change(self):
+        is_sim = self.tabview.get() == "Simulator"
+        self.lbl_console.configure(text="Live Simulation Console" if is_sim else "Live Optimization Console")
+
+    def _add_compile_button(self, parent, target, label):
+        """One compile button per tab; run_compiler disables it while gfortran runs."""
+        btn = ctk.CTkButton(parent, text=label, fg_color="#e0b000", hover_color="#b38c00", text_color="#1a1a1a",
+                            command=lambda: self.run_compiler(target))
+        btn.pack(fill="x", padx=10, pady=(15, 0), side="bottom")
+        self.compile_buttons[target] = btn
 
     # ---------------------------------------------------------
     # TAB BUILDERS
@@ -195,21 +293,7 @@ class OWFLOGui(ctk.CTk):
                                             command=self.run_soga_pipeline, fg_color="#2c824c", hover_color="#1d5c34")
         self.btn_run_soga.pack(pady=10, fill="x", padx=10, side="bottom")
 
-        # --- NEW: Compilation Action Buttons ---
-        comp_frame = ctk.CTkFrame(self.tab_soga, fg_color="transparent")
-        comp_frame.pack(fill="x", padx=10, pady=(15, 0), side="bottom")
-
-        self.btn_compile_soga_debug = ctk.CTkButton(
-            comp_frame, text="Compile SOGA (Debug)", fg_color="#b8860b", hover_color="#8a6508",
-            command=lambda: self.run_compiler("debug", "soga")
-        )
-        self.btn_compile_soga_debug.pack(side="left", expand=True, fill="x", padx=(0, 5))
-
-        self.btn_compile_soga_fast = ctk.CTkButton(
-            comp_frame, text="Compile SOGA (Fast)", fg_color="#b22222", hover_color="#8b1a1a",
-            command=lambda: self.run_compiler("fast", "soga")
-        )
-        self.btn_compile_soga_fast.pack(side="left", expand=True, fill="x", padx=(5, 0))
+        self._add_compile_button(self.tab_soga, "soga", "Compile SOGA")
 
         # --- NEW: SOGA Visualizer Buttons ---
         viz_frame_soga = ctk.CTkFrame(self.tab_soga, fg_color="transparent")
@@ -312,25 +396,12 @@ class OWFLOGui(ctk.CTk):
                                            command=self.run_moga_pipeline, fg_color="#2c824c", hover_color="#1d5c34")
         self.btn_run_moga.pack(pady=10, fill="x", padx=10, side="bottom")
 
+        self._add_compile_button(self.tab_moga, "moga", "Compile NSGA-II")
+
         # --- MOGA Visualizer Buttons ---
         viz_frame_moga = ctk.CTkFrame(self.tab_moga, fg_color="transparent")
         viz_frame_moga.pack(fill="x", padx=10, pady=(0, 10), side="bottom")
 
-        # --- NEW: Compilation Action Buttons ---
-        comp_frame = ctk.CTkFrame(self.tab_moga, fg_color="transparent")
-        comp_frame.pack(fill="x", padx=10, pady=(15, 0), side="bottom")
-
-        self.btn_compile_moga_debug = ctk.CTkButton(
-            comp_frame, text="Compile (Debug)", fg_color="#b8860b", hover_color="#8a6508",
-            command=lambda: self.run_compiler("debug", "moga")
-        )
-        self.btn_compile_moga_debug.pack(side="left", expand=True, fill="x", padx=(0, 5))
-
-        self.btn_compile_moga_fast = ctk.CTkButton(
-            comp_frame, text="Compile (Fast)", fg_color="#b22222", hover_color="#8b1a1a",
-            command=lambda: self.run_compiler("fast", "moga")
-        )
-        self.btn_compile_moga_fast.pack(side="left", expand=True, fill="x", padx=(5, 0))
 
         # Row 1: Static Plots
         plot_row = ctk.CTkFrame(viz_frame_moga, fg_color="transparent")
@@ -353,7 +424,7 @@ class OWFLOGui(ctk.CTk):
         anim_row.pack(fill="x", pady=5)
 
         ctk.CTkLabel(anim_row, text="Height:").pack(side="left", padx=(0, 2))
-        self.anim_height_dropdown = ctk.CTkOptionMenu(anim_row, values=["Run optimization first"], state="normal", width=90)
+        self.anim_height_dropdown = ctk.CTkOptionMenu(anim_row, values=["Run optimization first"], state="normal", width=110, dynamic_resizing=False)
         self.anim_height_dropdown.pack(side="left", padx=(0, 5))
 
         ctk.CTkLabel(anim_row, text="Layout:").pack(side="left", padx=(0, 2))
@@ -370,8 +441,83 @@ class OWFLOGui(ctk.CTk):
         self.moga_anim_fps.insert(0, "10")
         self.moga_anim_fps.pack(side="left", padx=(0, 10))
 
-        self.btn_moga_anim = ctk.CTkButton(anim_row, text="Generate Flow Animation", state="normal", command=self.generate_moga_animation)
+        self.btn_moga_anim = ctk.CTkButton(anim_row, text="Generate MP4 Flow", state="normal", command=self.generate_moga_animation)
         self.btn_moga_anim.pack(side="left", expand=True, fill="x")
+
+    def build_simulator_tab(self):
+        """Constructs the time-series re-simulation inputs."""
+        self.sim_config = ctk.StringVar(value="./inputs/config.inp")
+        self.sim_csv = ctk.StringVar(value="./outputs/final_pareto_front.csv")
+
+        sim_frame = ctk.CTkFrame(self.tab_sim, corner_radius=10)
+        sim_frame.pack(fill="x", padx=10, pady=(10, 20))
+
+        ctk.CTkLabel(sim_frame, text="Time-Series Simulator", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=15, pady=(10, 5))
+        ctk.CTkLabel(sim_frame, text="Re-simulates optimizer layouts on filtered_wind.txt. Results go to the output folder set in the config file.",
+                     text_color="gray", font=ctk.CTkFont(size=11, slant="italic"), wraplength=480, justify="left").pack(anchor="w", padx=15, pady=(0, 10))
+
+        # Config source: an existing config.inp, or parameters typed in below
+        self.sim_config_source = ctk.StringVar(value="Config File")
+        ctk.CTkSegmentedButton(sim_frame, values=["Config File", "Manual Parameters"], variable=self.sim_config_source,
+                               command=self.toggle_sim_config_source).pack(anchor="w", padx=15, pady=(0, 10))
+
+        def add_path_row(grid, row, label_text, string_var, filetypes=None, is_dir=False):
+            ctk.CTkLabel(grid, text=label_text).grid(row=row, column=0, sticky="e", padx=5, pady=5)
+            ctk.CTkEntry(grid, textvariable=string_var, width=350).grid(row=row, column=1, padx=5, pady=5, sticky="w")
+            ctk.CTkButton(grid, text="Folder" if is_dir else "Browse", width=80, fg_color="#4a4a4a", hover_color="#333333",
+                          command=lambda: self.select_path(string_var, f"Select {label_text}", is_dir, filetypes)).grid(row=row, column=2, padx=5, pady=5)
+
+        # Config-file mode
+        self.sim_file_grid = ctk.CTkFrame(sim_frame, fg_color="transparent")
+        self.sim_file_grid.pack(fill="x", padx=15, pady=5)
+        add_path_row(self.sim_file_grid, 0, "Config File:", self.sim_config, [("Config", "*.inp"), ("All Files", "*.*")])
+
+        # Manual mode: only the fields the simulator reads (see CONFIG_FIELDS)
+        self.sim_manual_grid = ctk.CTkFrame(sim_frame, fg_color="transparent")
+        self.sim_turb = ctk.StringVar(value="./inputs/turbine_spec.txt")
+        self.sim_mesh = ctk.StringVar(value="./inputs/windfarm_rocol.txt")
+        self.sim_wind1 = ctk.StringVar(value="./inputs/filtered_wind.txt")
+        self.sim_bathy = ctk.StringVar(value="./inputs/farm_bathymetry.dat")
+        self.sim_dist = ctk.StringVar(value="./inputs/site_distances.txt")
+        self.sim_out = ctk.StringVar(value="./outputs/")
+        add_path_row(self.sim_manual_grid, 0, "Turbine Master:", self.sim_turb, [("Text/CSV", "*.txt *.csv *.dat")])
+        add_path_row(self.sim_manual_grid, 1, "Mesh Coordinates:", self.sim_mesh, [("Text", "*.txt")])
+        add_path_row(self.sim_manual_grid, 2, "Wind Time-Series:", self.sim_wind1, [("Text", "*.txt")])
+        add_path_row(self.sim_manual_grid, 3, "Bathymetry Data:", self.sim_bathy, [("Data", "*.dat")])
+        add_path_row(self.sim_manual_grid, 4, "Site Distances:", self.sim_dist, [("Text", "*.txt")])
+        add_path_row(self.sim_manual_grid, 5, "Output Directory:", self.sim_out, is_dir=True)
+        ctk.CTkLabel(self.sim_manual_grid, text="Workability:").grid(row=6, column=0, sticky="e", padx=5, pady=5)
+        self.sim_work = ctk.CTkEntry(self.sim_manual_grid, width=100)
+        self.sim_work.insert(0, "0.7")
+        self.sim_work.grid(row=6, column=1, padx=5, pady=5, sticky="w")
+        ctk.CTkLabel(self.sim_manual_grid, text="Written to ./inputs/simulation_config.inp; ./inputs/config.inp is not changed.",
+                     text_color="gray", font=ctk.CTkFont(size=11, slant="italic")).grid(row=7, column=0, columnspan=3, sticky="w", padx=5, pady=(0, 5))
+
+        # Shared by both modes
+        sim_grid = ctk.CTkFrame(sim_frame, fg_color="transparent")
+        sim_grid.pack(fill="x", padx=15, pady=5)
+        self.sim_shared_grid = sim_grid
+        add_path_row(sim_grid, 0, "Solutions CSV:", self.sim_csv, [("CSV", "*.csv"), ("All Files", "*.*")])
+
+        ctk.CTkLabel(sim_grid, text="Rows:").grid(row=1, column=0, sticky="e", padx=5, pady=5)
+        self.sim_rows = ctk.CTkEntry(sim_grid, width=350, placeholder_text="all  or  1,4,7")
+        self.sim_rows.insert(0, "all")
+        self.sim_rows.grid(row=1, column=1, padx=5, pady=(5, 15), sticky="w")
+
+        self.btn_run_sim = ctk.CTkButton(self.tab_sim, text="Run Simulation", height=40, font=ctk.CTkFont(weight="bold"),
+                                         command=self.run_simulator_pipeline, fg_color="#2c824c", hover_color="#1d5c34")
+        self.btn_run_sim.pack(pady=10, fill="x", padx=10, side="bottom")
+
+        self._add_compile_button(self.tab_sim, "simulator", "Compile Simulator")
+
+    def toggle_sim_config_source(self, choice):
+        """Swaps the config-file row for the manual parameter fields."""
+        if choice == "Manual Parameters":
+            self.sim_file_grid.pack_forget()
+            self.sim_manual_grid.pack(fill="x", padx=15, pady=5, before=self.sim_shared_grid)
+        else:
+            self.sim_manual_grid.pack_forget()
+            self.sim_file_grid.pack(fill="x", padx=15, pady=5, before=self.sim_shared_grid)
 
     def build_farm_setup_tab(self):
         """Constructs the shared physical constraints and turbine selection."""
@@ -573,7 +719,7 @@ class OWFLOGui(ctk.CTk):
         self.seg_wind_mode.pack(side="left")
 
         # --- B. TIME WINDOW FILTERS (Shared) ---
-        tip_text = "💡 Tip: Hours are 0 to 23. Wrap-around is supported (e.g., Start 22, End 4)."
+        tip_text = "Tip: Hours are 0 to 23. Wrap-around is supported (e.g., Start 22, End 4)."
         ctk.CTkLabel(wind_frame, text=tip_text, text_color="gray",
                      font=ctk.CTkFont(size=11, slant="italic")).pack(anchor="w", padx=15, pady=(0, 5))
 
@@ -730,12 +876,12 @@ class OWFLOGui(ctk.CTk):
     def abort_process(self):
         """Force-kills the currently running Fortran subprocess."""
         if self.running_process is not None and self.running_process.poll() is None:
-            self.log("\n⚠️ ABORT SIGNAL SENT: Terminating Fortran process...")
+            self.log("\nABORT SIGNAL SENT: Terminating Fortran process...")
 
             try:
                 self.running_process.kill()  # Hard kill at the OS level
             except Exception as e:
-                self.log(f"🔴 Failed to kill process: {e}")
+                self.log(f"Failed to kill process: {e}")
 
     def select_path(self, var_name, title, is_dir=False, filetypes=None):
         if is_dir:
@@ -938,7 +1084,7 @@ class OWFLOGui(ctk.CTk):
 
 
         except ValueError:
-            self.log("🔴 ERROR: Please ensure all SOGA parameters are valid numbers.")
+            self.log("ERROR: Please ensure all SOGA parameters are valid numbers.")
             self.btn_run_soga.configure(state="normal")
             return
 
@@ -953,17 +1099,17 @@ class OWFLOGui(ctk.CTk):
                 soga_stall = int(self.soga_stall.get()) if self.soga_stall.get() else 0
                 self.generate_config_file(it_max, n_pop, p_cross, p_mut, mu, max_turbs, min_turbs, workability, soga_stall)
             except Exception as e:
-                self.log(f"🔴 ERROR writing config file: {e}")
+                self.log(f"ERROR writing config file: {e}")
                 self.after(0, lambda: self.btn_run_soga.configure(state="normal"))
                 return
 
-            self.log("🚀 Launching SOGA Fortran Optimizer...")
+            self.log("Launching SOGA Fortran Optimizer...")
 
-            exe_name = "soga_optimizer.exe" if sys.platform == "win32" else "./soga_optimizer"
-            exe_path = os.path.join(os.getcwd(), 'source', exe_name)
+            exe_path = fortran_exe("soga_optimizer")
+            exe_name = os.path.basename(exe_path)
 
             if not os.path.exists(exe_path):
-                self.log(f"🔴 ERROR: {exe_name} not found. Please click Compile SOGA first.")
+                self.log(f"ERROR: {exe_name} not found. Please click Compile SOGA first.")
                 self.after(0, lambda: self.btn_run_soga.configure(state="normal"))
                 return
 
@@ -985,7 +1131,7 @@ class OWFLOGui(ctk.CTk):
                 self.running_process.wait()
 
                 if self.running_process.returncode == 0:
-                    self.log("🎉 SOGA Optimization Finished Successfully!")
+                    self.log("SOGA Optimization Finished Successfully!")
                     self.after(0, lambda: self.btn_soga_plot.configure(state="normal"))
                     self.after(0, lambda: self.btn_soga_3d.configure(state="normal"))
                     self.after(0, lambda: self.btn_soga_anim.configure(state="normal"))
@@ -997,10 +1143,10 @@ class OWFLOGui(ctk.CTk):
                         self.after(0, lambda: self.soga_anim_height_dropdown.configure(values=valid_levels, state="normal"))
                         self.after(0, lambda: self.soga_anim_height_dropdown.set(valid_levels[0]))
                 else:
-                    self.log(f"🛑 Process Terminated (Exit code {self.running_process.returncode})")
+                    self.log(f"Process Terminated (Exit code {self.running_process.returncode})")
 
             except Exception as e:
-                self.log(f"🔴 System Error executing Fortran: {e}")
+                self.log(f"System Error executing Fortran: {e}")
             finally:
                 self.running_process = None
                 self.after(0, lambda: self.btn_abort.configure(state="disabled"))
@@ -1014,7 +1160,7 @@ class OWFLOGui(ctk.CTk):
         target_obj = self.soga_target.get() # Grab the objective name
         out_dir = self.path_out.get()       # Grab the dynamic output path
 
-        self.log(f"📈 Generating SOGA Convergence Plot for {target_obj} in {out_dir}...")
+        self.log(f"Generating SOGA Convergence Plot for {target_obj} in {out_dir}...")
         self.btn_soga_plot.configure(state="normal")
 
         def worker():
@@ -1036,7 +1182,7 @@ class OWFLOGui(ctk.CTk):
         except ValueError:
             z_scale = 5.0 # Fallback default
 
-        self.log(f"🌐 Launching SOGA 3D Viewer (Z-Scale: {z_scale}x)...")
+        self.log(f"Launching SOGA 3D Viewer (Z-Scale: {z_scale}x)...")
         self.btn_soga_3d.configure(state="normal")
 
         def worker():
@@ -1044,7 +1190,7 @@ class OWFLOGui(ctk.CTk):
                 # Pass the new parameters to visualizer
                 visualizer.generate_soga_3d_layout(target_obj=target_obj, z_scale=z_scale, turb_path=turb_file)
             except Exception as e:
-                self.log(f"🔴 Error in 3D viewer: {e}")
+                self.log(f"Error in 3D viewer: {e}")
             self.after(0, lambda: self.btn_soga_3d.configure(state="normal"))
         self._start_3d_viewer(worker)
 
@@ -1060,7 +1206,7 @@ class OWFLOGui(ctk.CTk):
         except ValueError:
             user_step, user_fps = 1, 10 # Fallbacks
 
-        self.log(f"🎬 Generating SOGA MP4 animation for {selected} (Step: {user_step}, FPS: {user_fps})...")
+        self.log(f"Generating SOGA MP4 animation for {selected} (Step: {user_step}, FPS: {user_fps})...")
         self.btn_soga_anim.configure(state="normal")
 
         def worker():
@@ -1076,7 +1222,7 @@ class OWFLOGui(ctk.CTk):
                 if out_mp4:
                     self._open_visualization_file(out_mp4)
             except Exception as e:
-                self.log(f"🔴 Error generating animation: {e}")
+                self.log(f"Error generating animation: {e}")
             self.after(0, lambda: self.btn_soga_anim.configure(state="normal"))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1096,7 +1242,7 @@ class OWFLOGui(ctk.CTk):
             min_turbs = int(self.farm_min_turb.get())
             workability = float(self.farm_work.get())
         except ValueError:
-            self.log("🔴 ERROR: Please ensure all MOGA parameters are valid numbers.")
+            self.log("ERROR: Please ensure all MOGA parameters are valid numbers.")
             self.btn_run_moga.configure(state="normal")
             return
 
@@ -1110,23 +1256,23 @@ class OWFLOGui(ctk.CTk):
                 # Pass the variables extracted at the top of run_moga_pipeline
                 self.generate_config_file(it_max, n_pop, p_cross, p_mut, mu, max_turbs, min_turbs, workability)
             except Exception as e:
-                self.log(f"🔴 ERROR writing config file: {e}")
+                self.log(f"ERROR writing config file: {e}")
                 self.after(0, lambda: self.btn_run_moga.configure(state="normal"))
                 return
 
-            self.log("✅ config.inp successfully updated.")
-            self.log("🚀 Launching Fortran Optimizer...")
+            self.log("config.inp successfully updated.")
+            self.log("Launching Fortran Optimizer...")
 
             # 3. Execute Fortran Executable and stream output LIVE
             import subprocess
 
             # Determine platform-specific binary name
             # Determine platform-specific binary name
-            exe_name = "moga_optimizer.exe" if sys.platform == "win32" else "./moga_optimizer"
-            exe_path = os.path.join(os.getcwd(), 'source', exe_name)
+            exe_path = fortran_exe("moga_optimizer")
+            exe_name = os.path.basename(exe_path)
 
             if not os.path.exists(exe_path):
-                self.log(f"🔴 ERROR: Compiled optimizer ({exe_name}) not found in /source folder.")
+                self.log(f"ERROR: Compiled optimizer ({exe_name}) not found in /build folder.")
                 self.after(0, lambda: self.btn_run_moga.configure(state="normal"))
                 return
 
@@ -1161,7 +1307,7 @@ class OWFLOGui(ctk.CTk):
                 self.running_process.wait()
 
                 if self.running_process.returncode == 0:
-                    self.log("🎉 NSGA-II Optimization Finished Successfully!")
+                    self.log("NSGA-II Optimization Finished Successfully!")
 
                     # 1. Unlock the plot buttons
                     self.after(0, lambda: self.btn_moga_pareto.configure(state="normal"))
@@ -1171,10 +1317,10 @@ class OWFLOGui(ctk.CTk):
                     # 2. Dynamically find the max height level and update the dropdown
                     self.update_animation_dropdown()
                 else:
-                    self.log(f"🛑 Process Terminated (Exit code {self.running_process.returncode})")
+                    self.log(f"Process Terminated (Exit code {self.running_process.returncode})")
 
             except Exception as e:
-                self.log(f"🔴 System Error executing Fortran: {e}")
+                self.log(f"System Error executing Fortran: {e}")
 
             finally:
                 # 5. Cleanup: Disconnect the process and disable the abort button
@@ -1188,31 +1334,94 @@ class OWFLOGui(ctk.CTk):
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
-    def run_compiler(self, mode, target="moga"):
-        # Disable buttons to prevent spawning multiple compile threads
-        if target == "moga":
-            self.btn_compile_moga_debug.configure(state="disabled")
-            self.btn_compile_moga_fast.configure(state="disabled")
+    def run_simulator_pipeline(self):
+        exe_path = fortran_exe("simulator")
+        config_path, csv_path = self.sim_config.get(), self.sim_csv.get()
+
+        try:
+            if self.sim_config_source.get() == "Manual Parameters":
+                workability = float(self.sim_work.get())
+                if workability <= 0:
+                    raise ValueError("Workability must be greater than 0.")
+                values = simulator_config_values(
+                    turb=self.sim_turb.get(), mesh=self.sim_mesh.get(), wind1=self.sim_wind1.get(),
+                    bathy=self.sim_bathy.get(), dist=self.sim_dist.get(), out_dir=self.sim_out.get(),
+                    workability=workability,
+                )
+                for key in ("f_turb", "f_mesh", "f_wind1", "f_bathy", "f_dist"):
+                    if not os.path.exists(values[key]):
+                        raise ValueError(f"Input file not found: {values[key]}")
+                config_path = "./inputs/simulation_config.inp"
+                with open(config_path, "w") as f:
+                    f.write(format_config(values))
+                self.log(f"Simulation parameters written to {config_path}")
+            cmd = build_simulator_command(exe_path, config_path, csv_path, self.sim_rows.get())
+        except ValueError as e:
+            self.log(f"ERROR: {e}")
+            return
+        for label, path in (("Simulator executable (compile it first)", exe_path), ("Config file", config_path), ("Solutions CSV", csv_path)):
+            if not os.path.exists(path):
+                self.log(f"ERROR: {label} not found: {path}")
+                return
+
+        self.btn_run_sim.configure(state="disabled")
 
         def worker():
-            self.log(f"--- Starting Fortran Compilation ({mode.upper()} | {target.upper()}) ---")
+            self.log("Launching Time-Series Simulator...")
+            self.log(f"Executing: {' '.join(cmd)}")
+            try:
+                self.after(0, lambda: self.btn_abort.configure(state="normal"))
+                self.running_process = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1, cwd=os.getcwd()
+                )
+                for line in self.running_process.stdout:
+                    self.log(line.strip())
+                self.running_process.wait()
+
+                if self.running_process.returncode == 0:
+                    self.log("Simulation Finished Successfully!")
+                else:
+                    self.log(f"Process Terminated (Exit code {self.running_process.returncode})")
+            except Exception as e:
+                self.log(f"System Error executing simulator: {e}")
+            finally:
+                self.running_process = None
+                self.after(0, lambda: self.btn_abort.configure(state="disabled"))
+                self.after(0, lambda: self.btn_run_sim.configure(state="normal"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def run_compiler(self, target):
+        # Disable the button to prevent spawning multiple compile threads
+        button = self.compile_buttons[target]
+        button.configure(state="disabled")
+
+        def worker():
+            self.log(f"--- Starting Fortran Compilation ({target.upper()}) ---")
 
             # Automatically set the correct binary extension based on the OS
-            exe_name = f"{target}_optimizer.exe" if sys.platform == "win32" else f"{target}_optimizer"
+            out_path = fortran_exe("simulator" if target == "simulator" else f"{target}_optimizer")
+            exe_name = os.path.basename(out_path)
+            # Each target gets its own module folder, so compiles running at once don't collide
+            mod_dir = os.path.join(os.path.dirname(out_path), f"mod_{target}")
+            os.makedirs(mod_dir, exist_ok=True)
 
-            # Define exact paths to the core library and the specific main script
-            out_path = os.path.join(".", "source", exe_name)
+            # Define exact paths to the core library and the specific main script(s)
             core_path = os.path.join(".", "source", "wflop_core.f90")
-            main_path = os.path.join(".", "source", f"main_{target}.f90")
-
-            # Define gfortran flags
-            if mode == "debug":
-                flags = ["-Wall", "-Wextra", "-g", "-O0", "-fcheck=all", "-fbacktrace", "-fopenmp"]
+            if target == "simulator":
+                main_paths = [os.path.join(".", "source", "simulation.f90"), os.path.join(".", "source", "main_simulator.f90")]
             else:
-                flags = ["-O3", "-fopenmp"]
+                main_paths = [os.path.join(".", "source", f"main_{target}.f90")]
+
+            # Optimized build for this machine: -march=native uses every CPU instruction set
+            # available here, -flto optimizes across the core module and the driver.
+            # -ffast-math is deliberately left out: it can change floating-point results.
+            flags = ["-O3", "-march=native", "-funroll-loops", "-flto", "-fopenmp"]
 
             # Command now compiles BOTH the core module and the main program!
-            cmd = ["gfortran"] + flags + [core_path, main_path, "-o", out_path]
+            # -J keeps the .mod files in build/ instead of the working directory
+            cmd = ["gfortran"] + flags + ["-J", mod_dir, core_path, *main_paths, "-o", out_path]
             self.log(f"Executing: {' '.join(cmd)}")
 
             try:
@@ -1228,19 +1437,17 @@ class OWFLOGui(ctk.CTk):
                 process.wait()
 
                 if process.returncode == 0:
-                    self.log(f"✅ Compilation Successful! Executable saved as: {exe_name}")
+                    self.log(f"Compilation Successful! Executable saved as: build/{exe_name}")
                 else:
-                    self.log(f"🔴 Compilation FAILED with exit code {process.returncode}")
+                    self.log(f"Compilation FAILED with exit code {process.returncode}")
 
             except FileNotFoundError:
-                self.log("🔴 ERROR: 'gfortran' command not found. Ensure MinGW is in your system PATH.")
+                self.log("ERROR: 'gfortran' command not found. Ensure MinGW is in your system PATH.")
             except Exception as e:
-                self.log(f"🔴 System Error during compilation: {e}")
+                self.log(f"System Error during compilation: {e}")
 
-            # Re-enable buttons safely from the main thread
-            if target == "moga":
-                self.after(0, lambda: self.btn_compile_moga_debug.configure(state="normal"))
-                self.after(0, lambda: self.btn_compile_moga_fast.configure(state="normal"))
+            # Re-enable the button safely from the main thread
+            self.after(0, lambda: button.configure(state="normal"))
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
@@ -1251,14 +1458,14 @@ class OWFLOGui(ctk.CTk):
 
     def plot_moga_pareto(self):
         out_dir = self.path_out.get() # Grab the dynamic output path
-        self.log(f"📊 Generating Pareto Front plots in {out_dir}...")
+        self.log(f"Generating Pareto Front plots in {out_dir}...")
         self.btn_moga_pareto.configure(state="normal")
 
         def worker():
             # Pass the dynamic output directory to the visualizer
             success = visualizer.save_pareto_plots(output_dir=out_dir)
             if success:
-                self.log(f"✅ Pareto plots saved to {out_dir}")
+                self.log(f"Pareto plots saved to {out_dir}")
 
                 # --- Auto-open BOTH images using dynamic paths ---
                 img1_path = os.path.join(out_dir, "plot_final_pareto.png")
@@ -1282,14 +1489,14 @@ class OWFLOGui(ctk.CTk):
         except ValueError:
             z_scale = 5.0
 
-        self.log(f"🌐 Launching 3D Viewer (Z-Scale: {z_scale}x)...")
+        self.log(f"Launching 3D Viewer (Z-Scale: {z_scale}x)...")
         self.btn_moga_3d.configure(state="normal")
 
         def worker():
             try:
                 visualizer.generate_3d_comparison(z_scale=z_scale, turb_path=turb_file)
             except Exception as e:
-                self.log(f"🔴 Error in 3D viewer: {e}")
+                self.log(f"Error in 3D viewer: {e}")
             self.after(0, lambda: self.btn_moga_3d.configure(state="normal"))
 
         self._start_3d_viewer(worker)
@@ -1310,7 +1517,7 @@ class OWFLOGui(ctk.CTk):
         except ValueError:
             user_step, user_fps = 1, 10 # Fallbacks
 
-        self.log(f"🎬 Generating MP4 animation for {selected_layout} at {selected_height} (Step: {user_step}, FPS: {user_fps})...")
+        self.log(f"Generating MP4 animation for {selected_layout} at {selected_height} (Step: {user_step}, FPS: {user_fps})...")
         self.btn_moga_anim.configure(state="disabled")
 
         def worker():
@@ -1327,10 +1534,10 @@ class OWFLOGui(ctk.CTk):
                     turb_path=self.path_turb.get()
                 )
                 if out_mp4:
-                    self.log(f"✅ Animation saved to {out_mp4}")
+                    self.log(f"Animation saved to {out_mp4}")
                     self._open_visualization_file(out_mp4)
             except Exception as e:
-                self.log(f"🔴 Error generating animation: {e}")
+                self.log(f"Error generating animation: {e}")
             self.after(0, lambda: self.btn_moga_anim.configure(state="normal"))
 
         import threading
@@ -1345,7 +1552,7 @@ class OWFLOGui(ctk.CTk):
             self.after(0, lambda: self.anim_height_dropdown.configure(values=valid_levels, state="normal"))
             self.after(0, lambda: self.anim_height_dropdown.set(valid_levels[0]))
         else:
-            self.log("⚠️ Could not detect height levels from Fortran output.")
+            self.log("Could not detect height levels from Fortran output.")
 
     def enforce_unique_objectives(self, changed_dropdown):
         """Defers the update slightly to prevent CustomTkinter internal event clashing."""
@@ -1397,7 +1604,7 @@ class OWFLOGui(ctk.CTk):
             w_capex_soft = float(self.soft_capex_weight.get())
             soft_penalty_power = float(self.soft_penalty_power.get())
         except Exception as e:
-            self.log(f"🔴 ERROR: Invalid soft-constraint numeric value: {e}")
+            self.log(f"ERROR: Invalid soft-constraint numeric value: {e}")
             try:
                 self.btn_run_soga.configure(state="normal")
             except Exception:
@@ -1408,36 +1615,21 @@ class OWFLOGui(ctk.CTk):
                 pass
             return
 
+        values = {
+            "it_max": it_max, "n_pop": n_pop, "p_cross": p_cross, "p_mut": p_mut, "mu": mu,
+            "max_turbs": max_turbs, "min_turbs": min_turbs, "soga_stall": soga_stall,
+            "workability": workability, "opt_mode": opt_mode_int, "obj_1": obj1_int,
+            "obj_2": obj2_int, "wind_mode": wind_mode_int, "use_soft_constraints": use_soft_int,
+            "aep_min_soft": aep_min_soft, "capex_max_soft": capex_max_soft,
+            "w_aep_soft": w_aep_soft, "w_capex_soft": w_capex_soft,
+            "soft_penalty_power": soft_penalty_power,
+            "f_turb": self.path_turb.get(), "f_mesh": self.path_mesh.get(),
+            "f_wind1": self.path_wind1.get(), "f_wind2": self.path_wind2.get(),
+            "f_bathy": self.path_bathy.get(), "f_dist": self.path_dist.get(),
+            "out_dir": self.path_out.get(),
+        }
         with open('./inputs/config.inp', 'w') as f:
-            f.write(f"{it_max}\n")
-            f.write(f"{n_pop}\n")
-            f.write(f"{p_cross}\n")
-            f.write(f"{p_mut}\n")
-            f.write(f"{mu}\n")
-            f.write(f"{max_turbs}\n")
-            f.write(f"{min_turbs}\n")
-            f.write(f"{soga_stall}\n")
-            f.write(f"{workability}\n")
-            f.write(f"{opt_mode_int}\n")
-            f.write(f"{obj1_int}\n")
-            f.write(f"{obj2_int}\n")
-            f.write(f"{wind_mode_int}\n")
-            # Soft-constraint block (must appear before file paths)
-            f.write(f"{use_soft_int}\n")
-            f.write(f"{aep_min_soft}\n")
-            f.write(f"{capex_max_soft}\n")
-            f.write(f"{w_aep_soft}\n")
-            f.write(f"{w_capex_soft}\n")
-            f.write(f"{soft_penalty_power}\n")
-
-            # File Paths
-            f.write(f'"{self.path_turb.get().replace(chr(92), "/")}"\n')
-            f.write(f'"{self.path_mesh.get().replace(chr(92), "/")}"\n')
-            f.write(f'"{self.path_wind1.get().replace(chr(92), "/")}"\n')
-            f.write(f'"{self.path_wind2.get().replace(chr(92), "/")}"\n')
-            f.write(f'"{self.path_bathy.get().replace(chr(92), "/")}"\n')
-            f.write(f'"{self.path_dist.get().replace(chr(92), "/")}"\n')
-            f.write(f'"{self.path_out.get().replace(chr(92), "/")}"\n')
+            f.write(format_config(values))
 
     # =====================================================================
     # WIND RESOURCE VISUALIZATION CALLBACK CONNECTIONS
@@ -1465,25 +1657,25 @@ class OWFLOGui(ctk.CTk):
 
     def plot_wind_rose(self):
         """Triggers the directional polar frequency mesh engine."""
-        self.log("🧭 Extracting joint probability matrix distributions...")
+        self.log("Extracting joint probability matrix distributions...")
         # Invokes interactive backend context parsing from visualizer_15.py
         success = visualizer.plot_wind_rose(json_path="./inputs/wind_analytics.json")
         if success:
-            self.log(f"🎉 Wind rose saved to {success}")
+            self.log(f"Wind rose saved to {success}")
             self._open_visualization_file(success)
         else:
-            self.log("🔴 ERROR: Unable to load or parse path destination structural matrices.")
+            self.log("ERROR: Unable to load or parse path destination structural matrices.")
 
     def plot_wind_speed_diagnostics(self):
         """Triggers the unified speed diagnostics profile canvas (Histogram + Weibull)."""
-        self.log("📊 Compiling empirical frequency bars and analytical parametric curve fields...")
+        self.log("Compiling empirical frequency bars and analytical parametric curve fields...")
         # Invokes the unified graphics plot context mapping both data parameters
         success = visualizer.plot_wind_speed_diagnostics(json_path="./inputs/wind_analytics.json")
         if success:
-            self.log(f"🎉 Wind speed histogram saved to {success}")
+            self.log(f"Wind speed histogram saved to {success}")
             self._open_visualization_file(success)
         else:
-            self.log("🔴 ERROR: Failed to decode target distribution profile parameters.")
+            self.log("ERROR: Failed to decode target distribution profile parameters.")
     # =====================================================================
 
     def run_wind_pipeline(self):

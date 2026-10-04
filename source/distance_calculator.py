@@ -48,7 +48,7 @@ def calculate_site_distances(shoreline_kml, grid_kml, port_kml, output_callback=
     output_file = './inputs/site_distances.txt' 
     
     if not os.path.exists(rocol_file) or not os.path.exists(metadata_file):
-        output_callback("🔴 ERROR: Mesh files missing. Generate the mesh first.")
+        output_callback("ERROR: Mesh files missing. Generate the mesh first.")
         return False
         
     output_callback("--- Starting Site Distance Calculations ---")
@@ -81,7 +81,7 @@ def calculate_site_distances(shoreline_kml, grid_kml, port_kml, output_callback=
         output_callback(f"1. Farm Center (UTM): X={center_x:.1f}, Y={center_y:.1f}")
         
     except Exception as e:
-        output_callback(f"🔴 ERROR reading mesh nodes: {e}")
+        output_callback(f"ERROR reading mesh nodes: {e}")
         return False
 
     # Target CRS Transformer
@@ -144,9 +144,9 @@ def calculate_site_distances(shoreline_kml, grid_kml, port_kml, output_callback=
         with open(output_file, 'w', newline='\n') as f:
             # Write shoreline, grid, and port distances (space separated)
             f.write(f"{shore_km:.3f} {grid_km:.3f} {port_km:.3f}\n")
-        output_callback(f"✅ Saved distances to {output_file} for the optimizer.")
+        output_callback(f"Saved distances to {output_file} for the optimizer.")
     except Exception as e:
-        output_callback(f"🔴 ERROR writing distances file: {e}")
+        output_callback(f"ERROR writing distances file: {e}")
         return False
 
     output_callback("--- Distance Calculations Complete ---")

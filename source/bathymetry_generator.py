@@ -26,7 +26,7 @@ def read_rocol_mesh(file_path, output_callback=print):
             
         return x_coords, y_coords, n_nodes
     except Exception as e:
-        output_callback(f"🔴 ERROR reading {file_path}: {e}")
+        output_callback(f"ERROR reading {file_path}: {e}")
         return None, None, None
 
 def read_asc_header(file_path):
@@ -45,11 +45,11 @@ def process_bathymetry(asc_file, output_callback=print):
     metadata_file = './inputs/mesh_metadata.json'
     
     if not os.path.exists(rocol_file):
-        output_callback("🔴 ERROR: 'windfarm_rocol.txt' not found. Generate the mesh first.")
+        output_callback("ERROR: 'windfarm_rocol.txt' not found. Generate the mesh first.")
         return False
         
     if not os.path.exists(metadata_file):
-        output_callback("🔴 ERROR: 'mesh_metadata.json' missing. Generate the mesh first.")
+        output_callback("ERROR: 'mesh_metadata.json' missing. Generate the mesh first.")
         return False
 
     output_callback("--- Starting Bathymetry Extraction ---")
@@ -85,7 +85,7 @@ def process_bathymetry(asc_file, output_callback=print):
     try:
         data_matrix = np.loadtxt(asc_file, skiprows=6)
     except Exception as e:
-        output_callback(f"🔴 ERROR loading ASCII matrix: {e}")
+        output_callback(f"ERROR loading ASCII matrix: {e}")
         return False
 
     # 4. Extract Depths
@@ -145,8 +145,8 @@ def process_bathymetry(asc_file, output_callback=print):
             for i in range(n_nodes):
                 f.write(f"{rel_x[i]:.4f} {rel_y[i]:.4f} {depths[i]:.4f}\n")
                 
-        output_callback("✅ SUCCESS: farm_bathymetry.dat is ready for the optimizer and Tecplot!")
+        output_callback("SUCCESS: farm_bathymetry.dat is ready for the optimizer and Tecplot!")
         return True
     except Exception as e:
-        output_callback(f"🔴 ERROR writing file: {e}")
+        output_callback(f"ERROR writing file: {e}")
         return False

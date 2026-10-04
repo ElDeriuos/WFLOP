@@ -4,7 +4,7 @@
 #     uv run pyinstaller wflop.spec --noconfirm
 #
 # Result: dist/WFLOP/ containing the WFLOP executable plus the inputs/,
-# outputs/ and source/ folders the app reads and writes at runtime.
+# outputs/, source/ and build/ folders the app reads and writes at runtime.
 
 import os
 import shutil
@@ -59,28 +59,23 @@ shutil.copy2(os.path.join(root, "inputs", "turbine_spec.txt"), inputs_dst)
 
 os.makedirs(os.path.join(app_dir, "outputs"), exist_ok=True)
 
-# source/: Fortran sources (for the GUI's Compile buttons) and prebuilt programs
+# source/: Fortran sources, for the GUI's Compile buttons
 src_dst = os.path.join(app_dir, "source")
 os.makedirs(src_dst, exist_ok=True)
-for name in ("wflop_core.f90", "main_soga.f90", "main_moga.f90", "polygon3.for"):
+for name in ("wflop_core.f90", "main_soga.f90", "main_moga.f90",
+             "simulation.f90", "main_simulator.f90", "polygon3.for"):
     shutil.copy2(os.path.join(root, "source", name), src_dst)
 
-prebuilt = {
-    os.path.join(root, "build", "soga_optimizer" + ext): "soga_optimizer" + ext,
-    os.path.join(root, "build", "moga_optimizer" + ext): "moga_optimizer" + ext,
-    os.path.join(root, "source", "polygon3" + ext): "polygon3" + ext,
-}
-for src, name in prebuilt.items():
+# build/: prebuilt programs, where the GUI runs them from
+build_dst = os.path.join(app_dir, "build")
+os.makedirs(build_dst, exist_ok=True)
+for name in ("soga_optimizer", "moga_optimizer", "simulator", "polygon3"):
+    src = os.path.join(root, "build", name + ext)
     if os.path.exists(src):
-        shutil.copy2(src, os.path.join(src_dst, name))
+        shutil.copy2(src, build_dst)
     else:
         print(f"WARNING: {src} not found; run `make all` first. "
               f"The app will ask the user to compile it.")
-
-# Command-line simulator, for users who want it
-sim = os.path.join(root, "build", "simulator" + ext)
-if os.path.exists(sim):
-    shutil.copy2(sim, os.path.join(app_dir, "simulator" + ext))
 
 for doc in ("README.md", "LICENSE"):
     shutil.copy2(os.path.join(root, doc), app_dir)
