@@ -19,9 +19,15 @@ The repository supports both single-objective genetic optimization (SOGA) and mu
 
 No Python installation is needed.
 
-1. Install the external tools: **gfortran** (on Windows, MSYS2/MinGW-w64: `pacman -S mingw-w64-x86_64-gcc-fortran mingw-w64-x86_64-libgomp`) and **FFmpeg**, and make sure both are on your `PATH`.
-2. Download `WFLOP-windows-x86_64.zip` or `WFLOP-linux-x86_64.tar.gz` from the [Releases page](https://github.com/ElDeriuos/WFLOP/releases) and extract it to a folder you can write to (not `Program Files`).
-3. Run `WFLOP.exe` (Windows) or `./WFLOP` (Linux).
+1. Install the external tools: **gfortran** (on macOS, `brew install gcc`; on Windows, MSYS2/MinGW-w64: `pacman -S mingw-w64-x86_64-gcc-fortran mingw-w64-x86_64-libgomp`) and **FFmpeg**, and make sure both are on your `PATH`.
+2. Download `WFLOP-windows-x86_64.zip`, `WFLOP-linux-x86_64.tar.gz` or `WFLOP-macos-arm64.tar.gz` (Apple Silicon) from the [Releases page](https://github.com/ElDeriuos/WFLOP/releases) and extract it to a folder you can write to (not `Program Files`).
+3. Run `WFLOP.exe` (Windows) or `./WFLOP` (Linux and macOS).
+
+   On macOS the app is not signed by Apple, so Gatekeeper blocks it on first launch. Clear the download quarantine once from Terminal, inside the extracted folder:
+
+   ```bash
+   xattr -dr com.apple.quarantine .
+   ```
 
 The optimizers come prebuilt in the `source/` folder, so you can skip the **Compile** buttons. Generated inputs are written to `inputs/` and results to `outputs/` inside the extracted folder.
 
