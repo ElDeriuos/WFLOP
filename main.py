@@ -23,6 +23,13 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(APP_DIR)
+
+# Apps launched from the macOS Finder do not inherit the shell PATH, so
+# Homebrew tools (gfortran, ffmpeg) would not be found.
+if sys.platform == "darwin":
+    for brew_bin in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if brew_bin not in os.environ.get("PATH", "").split(os.pathsep):
+            os.environ["PATH"] = brew_bin + os.pathsep + os.environ.get("PATH", "")
 os.makedirs("inputs", exist_ok=True)
 os.makedirs("outputs", exist_ok=True)
 
@@ -33,6 +40,9 @@ os.makedirs("outputs", exist_ok=True)
 ctk.set_appearance_mode("Light")
 # color_theme options: "blue" (standard), "green", "dark-blue"
 ctk.set_default_color_theme("dark-blue")
+
+# Monospace font for the live console, per platform
+MONO_FONT = {"win32": "Consolas", "darwin": "Menlo"}.get(sys.platform, "DejaVu Sans Mono")
 
 OBJ_MAPPING = {
     "Minimize LCOE": 1,
@@ -98,7 +108,7 @@ class OWFLOGui(ctk.CTk):
         self.lbl_console.grid(row=0, column=0, padx=10, pady=(10, 0), sticky="w")
 
         # 2. Live Console Textbox (Read-only)
-        self.console = ctk.CTkTextbox(self.output_frame, font=ctk.CTkFont(family="Consolas", size=12))
+        self.console = ctk.CTkTextbox(self.output_frame, font=ctk.CTkFont(family=MONO_FONT, size=12))
         self.console.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
         self.console.insert("0.0", "OWFLO System Initialized. Awaiting commands...\n")
         self.console.configure(state="disabled") # Prevent user typing
@@ -1036,7 +1046,7 @@ class OWFLOGui(ctk.CTk):
             except Exception as e:
                 self.log(f"🔴 Error in 3D viewer: {e}")
             self.after(0, lambda: self.btn_soga_3d.configure(state="normal"))
-        threading.Thread(target=worker, daemon=True).start()
+        self._start_3d_viewer(worker)
 
     def generate_soga_animation(self):
         selected = self.soga_anim_height_dropdown.get()
@@ -1282,8 +1292,7 @@ class OWFLOGui(ctk.CTk):
                 self.log(f"🔴 Error in 3D viewer: {e}")
             self.after(0, lambda: self.btn_moga_3d.configure(state="normal"))
 
-        import threading
-        threading.Thread(target=worker, daemon=True).start()
+        self._start_3d_viewer(worker)
 
     def generate_moga_animation(self):
         selected_height = self.anim_height_dropdown.get()
@@ -1433,6 +1442,15 @@ class OWFLOGui(ctk.CTk):
     # =====================================================================
     # WIND RESOURCE VISUALIZATION CALLBACK CONNECTIONS
     # =====================================================================
+    def _start_3d_viewer(self, worker):
+        """Run a PyVista viewer. macOS only allows windows on the main thread,
+        so there the viewer blocks the GUI until it is closed; elsewhere it
+        runs in a background thread."""
+        if sys.platform == "darwin":
+            self.after(0, worker)
+        else:
+            threading.Thread(target=worker, daemon=True).start()
+
     def _open_visualization_file(self, file_path):
         """Open a saved plot without requiring Matplotlib GUI support."""
         try:
