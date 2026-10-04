@@ -139,7 +139,7 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
         output_callback("polygon3 not found; compiling it with gfortran...")
         try:
             subprocess.run(
-                ["gfortran", "-ffixed-form", "-fno-automatic", "-O3", "-fopenmp",
+                ["gfortran", "-ffixed-form", "-fno-automatic", "-O3",
                  "./source/polygon3.for", "-o", binary_path],
                 check=True, capture_output=True, text=True
             )

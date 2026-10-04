@@ -17,11 +17,10 @@ The repository supports both single-objective genetic optimization (SOGA) and mu
 
 ## Quick start (pre-built version)
 
-No Python installation is needed.
+Nothing needs to be installed: no Python, no gfortran, no FFmpeg.
 
-1. Install the external tools: **gfortran** (on macOS, `brew install gcc`; on Windows, MSYS2/MinGW-w64: `pacman -S mingw-w64-x86_64-gcc-fortran mingw-w64-x86_64-libgomp`) and **FFmpeg**, and make sure both are on your `PATH`.
-2. Download `WFLOP-windows-x86_64.zip`, `WFLOP-linux-x86_64.tar.gz` or `WFLOP-macos-arm64.tar.gz` (Apple Silicon) from the [Releases page](https://github.com/ElDeriuos/WFLOP/releases) and extract it to a folder you can write to (not `Program Files`).
-3. Run `WFLOP.exe` (Windows) or `./WFLOP` (Linux and macOS).
+1. Download `WFLOP-windows-x86_64.zip`, `WFLOP-linux-x86_64.tar.gz` or `WFLOP-macos-arm64.tar.gz` (Apple Silicon) from the [Releases page](https://github.com/ElDeriuos/WFLOP/releases) and extract it to a folder you can write to (not `Program Files`).
+2. Run `WFLOP.exe` (Windows) or `./WFLOP` (Linux and macOS).
 
    On macOS the app is not signed by Apple, so Gatekeeper blocks it on first launch. Clear the download quarantine once from Terminal, inside the extracted folder:
 
@@ -29,9 +28,19 @@ No Python installation is needed.
    xattr -dr com.apple.quarantine .
    ```
 
-The optimizers come prebuilt in the `source/` folder, so you can skip the **Compile** buttons. Generated inputs are written to `inputs/` and results to `outputs/` inside the extracted folder.
+What the bundle contains:
 
-To build the bundle yourself: `make all && uv run pyinstaller wflop.spec --noconfirm` (output in `dist/WFLOP/`).
+- **Fortran programs** (`build/soga_optimizer`, `build/moga_optimizer`, `build/simulator`, `build/polygon3`), linked with the GCC runtime built in (`make STATIC=1`), so they run, OpenMP parallelism included, without gfortran.
+- **FFmpeg** for MP4 export, from the `imageio-ffmpeg` package.
+- **VTK** for the 3-D viewer, trimmed to the modules the viewer uses (see `wflop.spec`).
+
+The **Compile** buttons are only needed after editing the Fortran sources. Without gfortran on `PATH` they are disabled and the prebuilt programs are used. A **Run** button is disabled while its program is missing from `build/`.
+
+To check an install, run `WFLOP --self-test` (on Windows: `WFLOP.exe --self-test`). It confirms that the Fortran programs start, an MP4 can be written, and the 3-D viewer renders, then writes the result to `selftest.log`. The release workflow runs it on every platform.
+
+Generated inputs are written to `inputs/` and results to `outputs/` inside the extracted folder.
+
+To build the bundle yourself: `make all STATIC=1 && uv run pyinstaller wflop.spec --noconfirm` (output in `dist/WFLOP/`).
 
 ---
 
@@ -77,16 +86,18 @@ The GUI runs long preprocessing, compilation, optimization, and rendering action
 | `source/wind_generator.py` | Reads ERA5 NetCDF files, filters/interpolates `u10`/`v10`, writes time-series input, or bins a wind rose. |
 | `source/distance_calculator.py` | Calculates center-to-shore, center-to-grid, and center-to-port distances from KML geometry. |
 | `source/visualizer.py` | Wind-resource plots, Pareto/convergence plots, PyVista layouts, and FFmpeg animations. |
+| `source/selftest.py` | `WFLOP --self-test`: checks the Fortran programs, MP4 export and 3-D rendering of an install. |
 | `source/wflop_core.f90` | Fortran types, input loading, cost model, wake/power/fatigue physics, NSGA-II, SOGA, and output writers. |
 | `source/main_soga.f90` | SOGA driver. |
 | `source/main_moga.f90` | NSGA-II driver. |
 | `source/simulation.f90` | Re-simulates optimizer CSV rows using the time-series physics. |
 | `source/main_simulator.f90` | Command-line simulator driver and row-selector parser. |
 | `source/polygon3.for` | Legacy fixed-format Fortran polygon-to-grid mesh generator. |
-| `Makefile` | Builds the simulator and both optimizer executables under `build/`. |
+| `Makefile` | Builds every Fortran program under `build/` (`STATIC=1` for release builds). |
+| `wflop.spec` | PyInstaller recipe for the standalone bundle, including the VTK trimming. |
 | `inputs/` | Generated and user-supplied Fortran input files. |
 | `outputs/` | Optimization, simulation, plots, and animation outputs. |
-| `tests/` | Python tests for the wake-model implementation. |
+| `tests/` | Tests for `config.inp` writing, the simulator, the optimizers and the visualizations (see §9). |
 
 Compiled binaries are not tracked in git; build them with `make all` (see below).
 
@@ -99,14 +110,13 @@ Compiled binaries are not tracked in git; build them with `make all` (see below)
 - Python version compatible with `pyproject.toml` (`>=3.14` as currently declared).
 - GNU Fortran (`gfortran`), with OpenMP support.
 - GNU Make.
-- FFmpeg, required for MP4 animations.
 - A desktop environment/display for the CustomTkinter GUI and PyVista viewer.
 
 The Python dependencies are declared in `pyproject.toml`:
 
 - `customtkinter`
 - `numpy`, `pandas`, `scipy`
-- `matplotlib`, `pyvista`, `ffmpeg`
+- `matplotlib`, `pyvista`, `imageio-ffmpeg` (ships its own FFmpeg binary; no system FFmpeg is needed)
 - `xarray`, `netCDF4`
 - `pyproj`
 - `pytest`, `hypothesis`
@@ -122,10 +132,10 @@ Alternatively, create a virtual environment with Python and install the project 
 
 ```bash
 # Distribution-specific package names may differ
-sudo dnf install gcc-gfortran make ffmpeg
+sudo dnf install gcc-gfortran make
 ```
 
-On Windows, use a MinGW-w64/MSYS2 `gfortran` installation and ensure both `gfortran` and `ffmpeg` are on `PATH`.
+On Windows, use a MinGW-w64/MSYS2 `gfortran` installation and ensure `gfortran` is on `PATH`.
 
 ### Build the Fortran programs
 
@@ -153,13 +163,31 @@ make moga_optimizer
 make polygon3
 ```
 
-The GUI’s **Compile** buttons (SOGA, NSGA-II and Simulator tabs) call `gfortran` directly with their own debug/fast flags, but write to the same `build/` folder the GUI runs programs from. The GUI expects to be launched from the repository root because its paths are relative to the current working directory:
+For distribution, build with the GCC runtime linked in, so the programs run on machines without gfortran:
+
+```bash
+make all STATIC=1
+```
+
+`STATIC=1` uses `-static` on Windows. On Linux and macOS it uses `-static-libgfortran -static-libgcc` plus the static OpenMP library `libgomp.a`, so the programs only depend on the system C library. Some distributions package the static `libgfortran.a` separately (Fedora: `libgfortran-static`). `make omp_check STATIC=1` builds a small program that prints how many OpenMP threads ran, which the release workflow uses to confirm parallel runs work.
+
+The mesh step builds `build/polygon3` automatically the first time it runs, if it is missing.
+
+The GUI has one yellow **Compile** button on each of the SOGA, NSGA-II and Simulator tabs. It calls `gfortran` directly and writes to the same `build/` folder the GUI runs programs from, using an optimized build for the current machine:
+
+```text
+-O3 -march=native -funroll-loops -flto -fopenmp
+```
+
+`-march=native` means a binary compiled by the GUI may not run on a different, older CPU; use `make` for portable builds. `-ffast-math` is deliberately not used because it can change floating-point results. Each target keeps its module files in its own folder (`build/mod_<target>/`), so several compiles can run at once.
+
+The Compile buttons are disabled when `gfortran` is not on `PATH`, and a Run button is disabled while its program is missing from `build/`. Both are rechecked on every tab switch and after each compile.
+
+The GUI expects to be launched from the repository root because its paths are relative to the current working directory:
 
 ```bash
 python main.py
 ```
-
-For debugging, the GUI uses `-Wall -Wextra -g -O0 -fcheck=all -fbacktrace -fopenmp`; its fast build uses `-O3 -fopenmp`.
 
 ---
 
@@ -267,7 +295,14 @@ The backend uses the wind-speed, `Cp`, and `Ct` columns and linearly interpolate
 
 ### Farm Setup
 
-The GUI writes `inputs/config.inp` immediately before an optimization. The first values are:
+The GUI writes `inputs/config.inp` immediately before an optimization. The file is positional: one value per line, in the order below. Each line ends with a `!` comment naming the value and the modes that use it, for example:
+
+```text
+100                                      ! it_max: GA: max generations (SOGA, MOGA)
+0.65                                     ! workability: Farm: installation workability factor, affects CAPEX (all modes, simulator)
+```
+
+Fortran ignores everything after the value on each line, so a hand-edited file may keep or drop the comments. The positions are:
 
 | Position | Meaning |
 |---:|---|
@@ -496,7 +531,14 @@ The simulator re-evaluates layouts using the chronological wind data in `filtere
 
 It discovers `gene_1` through `gene_N` by header name, so metadata columns before the genes are ignored. Gene order must match mesh node order. Coordinates stored in the CSV are not used by the parser.
 
-Run from the GUI's **Simulator** tab, or build and run directly:
+Run from the GUI's **Simulator** tab, which shows its output in the **Live Simulation Console**. The tab takes its settings from one of two sources:
+
+- **Config File:** an existing `config.inp`, by default `inputs/config.inp`.
+- **Manual Parameters:** enter only the values the simulator reads: the turbine, mesh, wind time-series, bathymetry and site-distance files, the output folder, and workability. The GUI writes them to `inputs/simulation_config.inp`, with placeholders for the unused optimizer fields, and leaves `inputs/config.inp` unchanged.
+
+In both cases, choose the solutions CSV and the rows (`all`, or for example `1,4,7`). Invalid row lists are rejected before the simulator starts.
+
+To build and run the simulator from a terminal instead:
 
 ```bash
 make simulator
@@ -528,22 +570,22 @@ Before writing any output, the simulator checks every selected row. It stops wit
 
 ## 9. Tests
 
-The wake-model tests are Python implementations of the relevant Fortran formulas and do not require a compiled optimizer for the formula-level checks.
-
 Run the suite with:
 
 ```bash
 uv run pytest tests/
+uv run pytest -m integration tests/   # only the tests that build and run the Fortran programs
 ```
 
-Useful focused runs include:
+| File | What it checks |
+|---|---|
+| `tests/test_simulator_command.py` | Row-selector validation and the simulator command line. |
+| `tests/test_config_format.py` | `config.inp` writing: field order, comments on every line, and the visualizer reading the objectives back. |
+| `tests/test_simulator_bad_rows.py` | The simulator stops with an error, before writing any output, for missing rows and invalid genes. SOGA and NSGA-II read a commented `config.inp`. |
+| `tests/test_visualizer.py` | A tiny real SOGA and NSGA-II run, then every plot, both MP4 animations (with `PATH` emptied, so only the bundled FFmpeg can be used) and both 3-D views rendered offscreen. |
+| `tests/omp_check.f90` | Not a pytest test: built with `make omp_check` to show how many OpenMP threads ran. |
 
-```bash
-uv run pytest tests/test_wake_growth_rate.py -v
-uv run pytest -m integration tests/
-```
-
-The test coverage includes dynamic wake-growth coefficient behavior, independence between turbines, linear deficit superposition, maximum turbulence selection, no-wake turbulence preservation, iteration limits, coefficient-token precision, and single/two/three-turbine integration scenarios.
+The integration tests need the preprocessed site files in `inputs/` and skip themselves when those are missing. They write to temporary folders and never touch `outputs/`.
 
 ---
 

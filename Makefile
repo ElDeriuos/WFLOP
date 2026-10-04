@@ -2,6 +2,18 @@ FC = gfortran
 FFLAGS ?= -O2 -fopenmp -ffree-line-length-none
 BUILD ?= build
 
+# Link flags. `make STATIC=1` (used for releases) links the GCC runtime
+# (libgfortran, libquadmath, libgcc, libgomp) into the programs, so they run,
+# OpenMP included, on machines without gfortran installed.
+LDFLAGS = -fopenmp
+ifeq ($(STATIC),1)
+  ifeq ($(OS),Windows_NT)
+    LDFLAGS = -fopenmp -static
+  else
+    LDFLAGS = -static-libgfortran -static-libgcc $(shell $(FC) -print-file-name=libgomp.a) -lpthread
+  endif
+endif
+
 CORE_OBJ = $(BUILD)/wflop_core.o
 SIM_OBJ = $(BUILD)/simulation.o
 SIM_MAIN_OBJ = $(BUILD)/main_simulator.o
@@ -13,7 +25,7 @@ MOGA_EXE = $(BUILD)/moga_optimizer
 # Legacy mesher, run by the GUI's mesh step
 POLY_EXE = $(BUILD)/polygon3
 
-.PHONY: all simulator soga_optimizer moga_optimizer polygon3 clean
+.PHONY: all simulator soga_optimizer moga_optimizer polygon3 omp_check clean
 
 all: simulator soga_optimizer moga_optimizer polygon3
 
@@ -44,16 +56,22 @@ $(MOGA_MAIN_OBJ): source/main_moga.f90 $(CORE_OBJ) | $(BUILD)
 	$(FC) $(FFLAGS) -J$(BUILD) -I$(BUILD) -c $< -o $@
 
 $(SIM_EXE): $(CORE_OBJ) $(SIM_OBJ) $(SIM_MAIN_OBJ)
-	$(FC) $(FFLAGS) -o $@ $^
+	$(FC) -o $@ $^ $(LDFLAGS)
 
 $(SOGA_EXE): $(CORE_OBJ) $(SOGA_MAIN_OBJ)
-	$(FC) $(FFLAGS) -o $@ $^
+	$(FC) -o $@ $^ $(LDFLAGS)
 
 $(MOGA_EXE): $(CORE_OBJ) $(MOGA_MAIN_OBJ)
-	$(FC) $(FFLAGS) -o $@ $^
+	$(FC) -o $@ $^ $(LDFLAGS)
 
+# polygon3 has no OpenMP directives, so it is built without -fopenmp
 $(POLY_EXE): source/polygon3.for | $(BUILD)
-	$(FC) -ffixed-form -fno-automatic -O3 -fopenmp $< -o $@
+	$(FC) -ffixed-form -fno-automatic -O3 $< -o $@ $(filter-out -fopenmp,$(LDFLAGS))
+
+# Release check that the (static) OpenMP runtime runs threads; not part of `all`
+omp_check: tests/omp_check.f90 | $(BUILD)
+	$(FC) -fopenmp -J$(BUILD) -c $< -o $(BUILD)/omp_check.o
+	$(FC) -o $(BUILD)/omp_check $(BUILD)/omp_check.o $(LDFLAGS)
 
 clean:
 	rm -rf $(BUILD)

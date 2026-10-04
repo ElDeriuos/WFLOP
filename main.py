@@ -10,6 +10,7 @@ import os
 import sys
 import re
 import subprocess
+import shutil
 
 # =====================================================================
 # WORKING DIRECTORY
@@ -102,6 +103,10 @@ def simulator_config_values(turb, mesh, wind1, bathy, dist, out_dir, workability
         "f_turb": turb, "f_mesh": mesh, "f_wind1": wind1, "f_wind2": "./inputs/wind_rose_matrix.dat",
         "f_bathy": bathy, "f_dist": dist, "out_dir": out_dir if out_dir.endswith("/") else out_dir + "/",
     }
+
+
+# GUI target -> program name in build/
+PROGRAMS = {"soga": "soga_optimizer", "moga": "moga_optimizer", "simulator": "simulator"}
 
 
 def fortran_exe(name):
@@ -215,6 +220,11 @@ class OWFLOGui(ctk.CTk):
         self.enforce_unique_objectives(1)
         self._apply_objective_rules(1)
 
+        # Compile needs gfortran; Run needs the compiled program in build/
+        self.run_buttons = {"soga": self.btn_run_soga, "moga": self.btn_run_moga, "simulator": self.btn_run_sim}
+        self.compiling = set()
+        self.refresh_program_buttons(report=True)
+
     def _scrollable_tab(self, name):
         """Adds a tab whose content scrolls when it is taller than the window."""
         scroll = ctk.CTkScrollableFrame(self.tabview.add(name), fg_color="transparent")
@@ -224,11 +234,34 @@ class OWFLOGui(ctk.CTk):
     def on_tab_change(self):
         is_sim = self.tabview.get() == "Simulator"
         self.lbl_console.configure(text="Live Simulation Console" if is_sim else "Live Optimization Console")
+        self.refresh_program_buttons()
+
+    def refresh_program_buttons(self, report=False):
+        """Disables Compile without gfortran and Run without the compiled program.
+        Called at startup, on tab change, and after each compile."""
+        has_gfortran = shutil.which("gfortran") is not None
+        if report and not has_gfortran:
+            self.log("gfortran not found: Compile buttons are disabled. The prebuilt programs in build/ are used.")
+        for target, run_btn in self.run_buttons.items():
+            compile_btn = self.compile_buttons[target]
+            if target not in self.compiling:
+                compile_btn.configure(state="normal" if has_gfortran else "disabled",
+                                      text=compile_btn.base_text + ("" if has_gfortran else " (gfortran not found)"))
+            exe = fortran_exe(PROGRAMS[target])
+            built = os.path.exists(exe)
+            if report and not built:
+                self.log(f"{os.path.relpath(exe)} not found: its Run button is disabled until it is compiled.")
+            run_btn.configure(text=run_btn.base_text + ("" if built else " (program not built)"))
+            if not built:
+                run_btn.configure(state="disabled")
+            elif self.running_process is None and target not in self.compiling:
+                run_btn.configure(state="normal")
 
     def _add_compile_button(self, parent, target, label):
         """One compile button per tab; run_compiler disables it while gfortran runs."""
         btn = ctk.CTkButton(parent, text=label, fg_color="#e0b000", hover_color="#b38c00", text_color="#1a1a1a",
                             command=lambda: self.run_compiler(target))
+        btn.base_text = label
         btn.pack(fill="x", padx=10, pady=(15, 0), side="bottom")
         self.compile_buttons[target] = btn
 
@@ -291,6 +324,7 @@ class OWFLOGui(ctk.CTk):
 
         self.btn_run_soga = ctk.CTkButton(self.tab_soga, text="Run SOGA Optimization", height=40, font=ctk.CTkFont(weight="bold"),
                                             command=self.run_soga_pipeline, fg_color="#2c824c", hover_color="#1d5c34")
+        self.btn_run_soga.base_text = self.btn_run_soga.cget("text")
         self.btn_run_soga.pack(pady=10, fill="x", padx=10, side="bottom")
 
         self._add_compile_button(self.tab_soga, "soga", "Compile SOGA")
@@ -394,6 +428,7 @@ class OWFLOGui(ctk.CTk):
 
         self.btn_run_moga = ctk.CTkButton(self.tab_moga, text="Run NSGA-II Optimization", height=40, font=ctk.CTkFont(weight="bold"),
                                            command=self.run_moga_pipeline, fg_color="#2c824c", hover_color="#1d5c34")
+        self.btn_run_moga.base_text = self.btn_run_moga.cget("text")
         self.btn_run_moga.pack(pady=10, fill="x", padx=10, side="bottom")
 
         self._add_compile_button(self.tab_moga, "moga", "Compile NSGA-II")
@@ -506,6 +541,7 @@ class OWFLOGui(ctk.CTk):
 
         self.btn_run_sim = ctk.CTkButton(self.tab_sim, text="Run Simulation", height=40, font=ctk.CTkFont(weight="bold"),
                                          command=self.run_simulator_pipeline, fg_color="#2c824c", hover_color="#1d5c34")
+        self.btn_run_sim.base_text = self.btn_run_sim.cget("text")
         self.btn_run_sim.pack(pady=10, fill="x", padx=10, side="bottom")
 
         self._add_compile_button(self.tab_sim, "simulator", "Compile Simulator")
@@ -1396,12 +1432,13 @@ class OWFLOGui(ctk.CTk):
         # Disable the button to prevent spawning multiple compile threads
         button = self.compile_buttons[target]
         button.configure(state="disabled")
+        self.compiling.add(target)
 
         def worker():
             self.log(f"--- Starting Fortran Compilation ({target.upper()}) ---")
 
             # Automatically set the correct binary extension based on the OS
-            out_path = fortran_exe("simulator" if target == "simulator" else f"{target}_optimizer")
+            out_path = fortran_exe(PROGRAMS[target])
             exe_name = os.path.basename(out_path)
             # Each target gets its own module folder, so compiles running at once don't collide
             mod_dir = os.path.join(os.path.dirname(out_path), f"mod_{target}")
@@ -1447,7 +1484,8 @@ class OWFLOGui(ctk.CTk):
                 self.log(f"System Error during compilation: {e}")
 
             # Re-enable the button safely from the main thread
-            self.after(0, lambda: button.configure(state="normal"))
+            self.compiling.discard(target)
+            self.after(0, self.refresh_program_buttons)
 
         import threading
         threading.Thread(target=worker, daemon=True).start()
@@ -1712,6 +1750,9 @@ class OWFLOGui(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        from source import selftest
+        sys.exit(selftest.run(fortran_exe))
     # Adjust UI scaling for Linux HiDPI displays
     if sys.platform.startswith("linux"):
         ctk.set_widget_scaling(1.0)  # Try 1.2, 1.25, or 1.5 depending on your monitor
