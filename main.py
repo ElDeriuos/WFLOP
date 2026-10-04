@@ -1522,7 +1522,7 @@ class OWFLOGui(ctk.CTk):
 if __name__ == "__main__":
     # Adjust UI scaling for Linux HiDPI displays
     if sys.platform.startswith("linux"):
-        ctk.set_widget_scaling(1.5)  # Try 1.2, 1.25, or 1.5 depending on your monitor
-        ctk.set_window_scaling(1.5)  # Scales the base window dimensions proportionally
+        ctk.set_widget_scaling(1.0)  # Try 1.2, 1.25, or 1.5 depending on your monitor
+        ctk.set_window_scaling(1.0)  # Scales the base window dimensions proportionally
     app = OWFLOGui()
     app.mainloop()
