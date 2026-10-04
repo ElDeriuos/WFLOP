@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import traceback
 
 import numpy as np
 
@@ -24,9 +25,13 @@ def _check_fortran(exe_for):
 
 
 def _check_ffmpeg():
+    # Same setup as visualizer.py, without importing it (and with it VTK)
+    import imageio_ffmpeg
+    import matplotlib
+    matplotlib.use("Agg")
+    matplotlib.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation
-    from source import visualizer  # sets animation.ffmpeg_path to the bundled binary  # noqa: F401
     fig, ax = plt.subplots()
     line, = ax.plot([], [])
     ani = FuncAnimation(fig, lambda i: line.set_data(range(i + 1), range(i + 1)) or [line], frames=3)
@@ -54,19 +59,27 @@ def _check_vtk():
         raise RuntimeError("VTK rendered an empty image")
 
 
-def run(exe_for):
-    checks = [("Fortran programs", lambda: _check_fortran(exe_for)), ("ffmpeg (MP4 export)", _check_ffmpeg),
+def _exe_for(name):
+    return os.path.join(os.getcwd(), "build", name + (".exe" if sys.platform == "win32" else ""))
+
+
+def run():
+    """Runs every check. Each result is appended to selftest.log as soon as it is
+    known, with the full traceback on failure, so even a crash leaves a report."""
+    checks = [("Fortran programs", lambda: _check_fortran(_exe_for)), ("ffmpeg (MP4 export)", _check_ffmpeg),
               ("VTK (3D viewer)", _check_vtk)]
-    lines, ok = [], True
-    for name, check in checks:
-        try:
-            check()
-            lines.append(f"PASS  {name}")
-        except Exception as e:
-            ok = False
-            lines.append(f"FAIL  {name}: {e}")
-    report = "\n".join(lines) + "\n"
-    with open("selftest.log", "w") as f:
-        f.write(report)
-    sys.stdout and sys.stdout.write(report)
+    ok = True
+    with open("selftest.log", "w") as log:
+        def report(text):
+            log.write(text + "\n")
+            log.flush()
+            if sys.stdout:
+                print(text, flush=True)
+        for name, check in checks:
+            try:
+                check()
+                report(f"PASS  {name}")
+            except BaseException as e:
+                ok = False
+                report(f"FAIL  {name}: {e!r}\n" + traceback.format_exc())
     return 0 if ok else 1

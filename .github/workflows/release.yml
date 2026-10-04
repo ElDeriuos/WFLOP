@@ -113,7 +113,8 @@ jobs:
         shell: pwsh
         run: |
           $p = Start-Process dist/WFLOP/WFLOP.exe -ArgumentList '--self-test' -WorkingDirectory dist/WFLOP -Wait -PassThru
-          Get-Content dist/WFLOP/selftest.log
+          if (Test-Path dist/WFLOP/selftest.log) { Get-Content dist/WFLOP/selftest.log }
+          else { Write-Output "::error::No selftest.log: WFLOP.exe exited (code $($p.ExitCode)) before the self-test started" }
           if ($p.ExitCode -ne 0) { exit 1 }
 
       - uses: actions/upload-artifact@v4

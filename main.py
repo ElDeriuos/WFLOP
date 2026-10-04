@@ -1,16 +1,9 @@
-import customtkinter as ctk
-import tkinter.filedialog as filedialog
-import threading
-from source import mesh_generator
-from source import bathymetry_generator
-from source import wind_generator
-from source import distance_calculator
-from source import visualizer
 import os
 import sys
 import re
 import subprocess
 import shutil
+import threading
 
 # =====================================================================
 # WORKING DIRECTORY
@@ -33,6 +26,20 @@ if sys.platform == "darwin":
             os.environ["PATH"] = brew_bin + os.pathsep + os.environ.get("PATH", "")
 os.makedirs("inputs", exist_ok=True)
 os.makedirs("outputs", exist_ok=True)
+
+# `--self-test` runs before the GUI and plotting imports below, so an install whose
+# libraries fail to load still writes a report (selftest.log) instead of dying silently.
+if __name__ == "__main__" and "--self-test" in sys.argv:
+    from source import selftest
+    sys.exit(selftest.run())
+
+import customtkinter as ctk
+import tkinter.filedialog as filedialog
+from source import mesh_generator
+from source import bathymetry_generator
+from source import wind_generator
+from source import distance_calculator
+from source import visualizer
 
 # =====================================================================
 # DESIGN: GLOBAL THEME CONFIGURATION
@@ -1750,9 +1757,6 @@ class OWFLOGui(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 if __name__ == "__main__":
-    if "--self-test" in sys.argv:
-        from source import selftest
-        sys.exit(selftest.run(fortran_exe))
     # Adjust UI scaling for Linux HiDPI displays
     if sys.platform.startswith("linux"):
         ctk.set_widget_scaling(1.0)  # Try 1.2, 1.25, or 1.5 depending on your monitor

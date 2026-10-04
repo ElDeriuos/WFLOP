@@ -62,8 +62,12 @@ def _keep_binary(dest):
     parts = dest.replace("\\", "/").split("/")
     if "vtkmodules" not in parts:
         return True
+    # Only VTK's own modules are candidates; any other library shipped in the
+    # folder (platform runtimes, third-party DLLs) is always kept
     m = _VTK_STEM.match(parts[-1])
-    return m is None or m.group(1) in VTK_KEEP
+    if m is None or not m.group(1).startswith(("vtk", "viskores")):
+        return True
+    return m.group(1) in VTK_KEEP
 
 
 a.binaries = [b for b in a.binaries if _keep_binary(b[0])]
