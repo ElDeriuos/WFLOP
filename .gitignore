@@ -1,36 +1,43 @@
-# Python junk
+# Python
 __pycache__/
 *.pyc
+.venv/
+.pytest_cache/
+.hypothesis/
 
-# Fortran junk
+# Editors / tools
+.vscode/
+.kiro/
+
+# Fortran build artifacts
+build/
 *.mod
+*.mod0
 *.smod
 *.o
 *.obj
+*.exe
+source/soga_optimizer
+source/moga_optimizer
+source/polygon3
 
-# Ignore everything in the outputs directory
-outputs/*
-
-# ...but do NOT ignore the .gitkeep file
-!outputs/.gitkeep
+# Generated pipeline files (recreated by the GUI)
 inputs/config.inp
-inputs/wind_analytics.json
-inputs/wind_rose_matrix.dat
-source/moga_optimizer.exe
-inputs/config.inp
-
-.kiro
-.hypothesis
-.pytest_cache
-.venv
-.vscode
-source/.vscode/
-source/__pycache__/
-
-tests/
 inputs/farm_bathymetry.dat
-inputs/farm_bathymetry.dat
-inputs/filtered_wind.txt
 inputs/mesh_metadata.json
-inputs/raw_bathymetry/gebco_2024_n30.6_s23.5_w47.0_e57.0.asc
-inputs/Turbines/IEA-15-240-RWT_tabular.xlsx
+inputs/windfarm_rocol.txt
+inputs/site_distances.txt
+inputs/filtered_wind.txt
+inputs/wind_rose_matrix.dat
+inputs/wind_analytics.json
+xycoordinates.txt
+Polygon_project.txt
+polygon_project.txt
+windfarm_*.plt
+t
+t2.dat
+geom3.dat
+
+# Run outputs
+outputs/*
+!outputs/.gitkeep

@@ -68,7 +68,7 @@ The GUI runs long preprocessing, compilation, optimization, and rendering action
 | `outputs/` | Optimization, simulation, plots, and animation outputs. |
 | `tests/` | Python tests for the wake-model implementation. |
 
-The checked-in `source/` directory may contain prebuilt binaries and object files. Rebuilding is recommended when changing compilers, platforms, or Fortran sources.
+Compiled binaries are not tracked in git; build them with `make all` (see below).
 
 ---
 
@@ -109,7 +109,7 @@ On Windows, use a MinGW-w64/MSYS2 `gfortran` installation and ensure both `gfort
 
 ### Build the Fortran programs
 
-Build all three modern executables:
+Build all executables (the three Fortran 90 programs plus the legacy `polygon3` mesher):
 
 ```bash
 make all
@@ -121,6 +121,7 @@ This creates:
 build/simulator
 build/soga_optimizer
 build/moga_optimizer
+source/polygon3        # used by the GUI's mesh step
 ```
 
 Build individual targets with:
@@ -129,6 +130,7 @@ Build individual targets with:
 make simulator
 make soga_optimizer
 make moga_optimizer
+make polygon3
 ```
 
 The GUI’s **Compile SOGA/MOGA** buttons use a separate direct command and place the resulting optimizer in `source/` (`source/soga_optimizer` or `source/moga_optimizer`). The GUI expects to be launched from the repository root because its paths are relative to the current working directory:
@@ -535,3 +537,12 @@ The test coverage includes dynamic wake-growth coefficient behavior, independenc
 - Fatigue is a reduced analytical tower-root/monopile model; it does not replace aeroelastic or detailed structural analysis.
 - Hydrodynamic loading, tides, soil–pile interaction, OPEX, maintenance, failure, discounting, inflation, and decommissioning are not fully represented.
 - These are study-specific inputs, not universal program defaults; if you need to change them, modify the input files or script arguments based on your study's needs.
+
+---
+
+## License and data attribution
+
+WFLOP is released under the [MIT License](LICENSE).
+
+- `inputs/raw_bathymetry/` contains a subset of the GEBCO_2024 Grid (GEBCO Compilation Group (2024), doi:10.5285/1c44ce99-0a0d-5f4f-e063-7086abc0ea0d), included for convenience.
+- `inputs/Turbines/` reference turbine data is distributed under its own terms; see `inputs/Turbines/LICENSE.txt`.

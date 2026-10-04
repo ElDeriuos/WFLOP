@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gfortran
+        run: sudo apt-get update && sudo apt-get install -y gfortran make
+
+      - name: Build Fortran programs
+        run: make all
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install Python dependencies
+        run: uv sync
+
+      - name: Import-check Python modules
+        run: uv run python -c "import source.mesh_generator, source.bathymetry_generator, source.wind_generator, source.distance_calculator"
+
+      - name: Run tests
+        if: hashFiles('tests/**/*.py') != ''
+        run: uv run pytest tests/
