@@ -1012,8 +1012,7 @@ class OWFLOGui(ctk.CTk):
             out_img = visualizer.save_soga_convergence_plot(output_dir=out_dir, target_obj=target_obj)
             if out_img:
                 try:
-                    if sys.platform == "win32": os.startfile(os.path.normpath(out_img))
-                    else: subprocess.run(["xdg-open", out_img])
+                    self._open_visualization_file(out_img)
                 except Exception: pass
             self.after(0, lambda: self.btn_soga_plot.configure(state="normal"))
 
@@ -1065,8 +1064,7 @@ class OWFLOGui(ctk.CTk):
                     turb_path=self.path_turb.get()
                 )
                 if out_mp4:
-                    if sys.platform == "win32": os.startfile(os.path.normpath(out_mp4))
-                    else: subprocess.run(["xdg-open", out_mp4])
+                    self._open_visualization_file(out_mp4)
             except Exception as e:
                 self.log(f"🔴 Error generating animation: {e}")
             self.after(0, lambda: self.btn_soga_anim.configure(state="normal"))
@@ -1257,13 +1255,8 @@ class OWFLOGui(ctk.CTk):
                 img2_path = os.path.join(out_dir, "plot_evolution.png")
 
                 try:
-                    if sys.platform == "win32":
-                        os.startfile(os.path.normpath(img1_path))
-                        os.startfile(os.path.normpath(img2_path))
-                    else:
-                        import subprocess
-                        subprocess.run(["xdg-open", img1_path])
-                        subprocess.run(["xdg-open", img2_path])
+                    self._open_visualization_file(img1_path)
+                    self._open_visualization_file(img2_path)
                 except Exception:
                     pass
 
@@ -1326,8 +1319,7 @@ class OWFLOGui(ctk.CTk):
                 )
                 if out_mp4:
                     self.log(f"✅ Animation saved to {out_mp4}")
-                    if sys.platform == "win32": os.startfile(os.path.normpath(out_mp4))
-                    else: subprocess.run(["xdg-open", out_mp4])
+                    self._open_visualization_file(out_mp4)
             except Exception as e:
                 self.log(f"🔴 Error generating animation: {e}")
             self.after(0, lambda: self.btn_moga_anim.configure(state="normal"))

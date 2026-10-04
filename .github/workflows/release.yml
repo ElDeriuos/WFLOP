@@ -87,8 +87,47 @@ jobs:
           name: WFLOP-windows
           path: WFLOP-windows-x86_64.zip
 
+  macos:
+    # macos-14 and later are Apple Silicon (arm64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Homebrew gcc provides gfortran and libgomp (OpenMP)
+      - name: Install gfortran and Python with Tk
+        run: brew install gcc python@3.14 python-tk@3.14
+
+      - name: Build Fortran programs
+        run: make all
+
+      - uses: astral-sh/setup-uv@v6
+
+      # Use Homebrew's Python (native Aqua Tk), not uv's standalone build,
+      # for the same Tk-rendering reason as the Linux job.
+      - name: Build bundle
+        run: |
+          export UV_PYTHON_PREFERENCE=only-system
+          export UV_PYTHON="$(brew --prefix)/bin/python3.14"
+          uv sync
+          uv run pyinstaller wflop.spec --noconfirm
+          cd dist && tar -czf ../WFLOP-macos-arm64.tar.gz WFLOP
+
+      - name: Check bundled Tk uses native Aqua rendering
+        run: |
+          tkinter_so=$(find dist/WFLOP/_internal -name '_tkinter*.so' | head -1)
+          tk_lib=$(otool -L "$tkinter_so" | awk '/[Tt]k/ && !/_tkinter/ {print $1; exit}')
+          echo "Tk library: $tk_lib"
+          bundled=$(find dist/WFLOP/_internal -name "$(basename "$tk_lib")" | head -1)
+          otool -L "${bundled:-$tk_lib}" | grep -q Cocoa \
+            || { echo "::error::Tk is not the Aqua build; GUI will not render natively"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WFLOP-macos
+          path: WFLOP-macos-arm64.tar.gz
+
   release:
-    needs: [linux, windows]
+    needs: [linux, windows, macos]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -101,4 +140,5 @@ jobs:
           files: |
             WFLOP-linux-x86_64.tar.gz
             WFLOP-windows-x86_64.zip
+            WFLOP-macos-arm64.tar.gz
           generate_release_notes: true
