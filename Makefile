@@ -10,7 +10,18 @@ ifeq ($(STATIC),1)
   ifeq ($(OS),Windows_NT)
     LDFLAGS = -fopenmp -static
   else
-    LDFLAGS = -static-libgfortran -static-libgcc $(shell $(FC) -print-file-name=libgomp.a) -lpthread
+    # libquadmath (used by libgfortran) and libgomp are linked from their static
+    # archives. Older GCCs (Ubuntu 22.04, Homebrew) still add a dynamic -lquadmath;
+    # --as-needed / -dead_strip_dylibs drops it because nothing uses it any more.
+    ifeq ($(shell uname -s),Darwin)
+      DROP_UNUSED = -Wl,-dead_strip_dylibs
+    else
+      DROP_UNUSED = -Wl,--as-needed
+    endif
+    # -print-file-name returns the bare name when an archive is not installed
+    static_lib = $(filter /%,$(shell $(FC) -print-file-name=$(1)))
+    LDFLAGS = $(DROP_UNUSED) -static-libgfortran -static-libgcc \
+              $(call static_lib,libquadmath.a) $(call static_lib,libgomp.a) -lpthread
   endif
 endif
 
