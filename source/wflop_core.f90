@@ -188,7 +188,7 @@ CONTAINS
         OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', ACTION='READ', IOSTAT=ios)
 
         IF (ios /= 0) THEN
-            PRINT *, "🔴 ERROR: Could not open configuration file: ", TRIM(filename)
+            PRINT *, "ERROR: Could not open configuration file: ", TRIM(filename)
             STOP 1
         END IF
 
@@ -228,7 +228,7 @@ CONTAINS
         CLOSE(f_unit)
         IF (config%wind_mode /= WIND_MODE_TIMESERIES .AND. &
             config%wind_mode /= WIND_MODE_ROSE) THEN
-            PRINT *, "🔴 ERROR: Invalid wind_mode in config.inp: ", config%wind_mode
+            PRINT *, "ERROR: Invalid wind_mode in config.inp: ", config%wind_mode
             STOP 1
         END IF
 
@@ -264,7 +264,7 @@ CONTAINS
         REAL(wp), PARAMETER :: PI = 3.141592653589793_wp
 
         OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', ACTION='READ', IOSTAT=ios)
-        IF (ios /= 0) STOP "🔴 ERROR: Missing turbine_spec.txt"
+        IF (ios /= 0) ERROR STOP "ERROR: Missing turbine_spec.txt"
 
         READ(f_unit, *)
         READ(f_unit, *) site%n_types
@@ -367,7 +367,7 @@ CONTAINS
         IF (config%wind_mode == WIND_MODE_TIMESERIES) THEN
                     ! 1. Read the wind data header to get dimensions
             OPEN(NEWUNIT=f_unit, FILE=file_wind1, STATUS='OLD', IOSTAT=ios)
-            IF (ios /= 0) STOP "🔴 ERROR: Missing filtered_wind.txt"
+            IF (ios /= 0) ERROR STOP "ERROR: Missing filtered_wind.txt"
 
             READ(f_unit, *) ! Skip headers
             READ(f_unit, *)
@@ -429,7 +429,7 @@ CONTAINS
         ! 5. Read Bathymetry (Depth)
         ! --------------------------------------------------------------
         OPEN(NEWUNIT=f_unit, FILE=file_depth, STATUS='OLD', IOSTAT=ios)
-        IF (ios /= 0) STOP " ERROR: Missing farm_bathymetry.dat"
+        IF (ios /= 0) ERROR STOP " ERROR: Missing farm_bathymetry.dat"
 
         do i= 1, 9
             READ(f_unit, *) ! Skip headers
@@ -520,7 +520,7 @@ CONTAINS
 
         OPEN(NEWUNIT=u, FILE=filepath, STATUS='OLD', ACTION='READ', IOSTAT=ios)
         IF (ios /= 0) THEN
-            PRINT *, "🔴 ERROR: Cannot open curve file: ", TRIM(filepath)
+            PRINT *, "ERROR: Cannot open curve file: ", TRIM(filepath)
             STOP 1
         END IF
 
@@ -531,7 +531,7 @@ CONTAINS
             ! Read a line. If we hit End-Of-File (ios < 0), exit the loop.
             READ(u, *, IOSTAT=ios)
             IF (ios < 0) EXIT
-            IF (ios > 0) STOP "🔴 ERROR: Formatting issue in curve file."
+            IF (ios > 0) ERROR STOP "ERROR: Formatting issue in curve file."
             count = count + 1
         END DO
 
@@ -2879,8 +2879,8 @@ contains
             ! First generation: Create/Replace the file and write the dynamic header
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='REPLACE', IOSTAT=ios)
             IF (ios /= 0) THEN
-                PRINT *, "🔴 ERROR: Could not create output file: ", TRIM(filename)
-                STOP
+                PRINT *, "ERROR: Could not create output file: ", TRIM(filename)
+                STOP 1
             END IF
             ! Output all metrics so Python can dynamically choose which to plot
             WRITE(f_unit, '(A)') 'generation,LCOE,raw_cost,raw_aep,raw_fatigue,soft_aep_violation,soft_capex_violation,penalty_aep,penalty_capex,penalty_lcoe'
@@ -2888,8 +2888,8 @@ contains
             ! Subsequent generations: Open the existing file and jump to the bottom
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', POSITION='APPEND', IOSTAT=ios)
             IF (ios /= 0) THEN
-                PRINT *, "🔴 ERROR: Could not append to output file: ", TRIM(filename)
-                STOP
+                PRINT *, "ERROR: Could not append to output file: ", TRIM(filename)
+                STOP 1
             END IF
         END IF
 
@@ -2933,8 +2933,8 @@ contains
         ! 1. Open file safely using NEWUNIT
         OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='REPLACE', IOSTAT=ios)
         IF (ios /= 0) THEN
-            PRINT *, "🔴 ERROR: Could not create final output file: ", TRIM(filename)
-            STOP
+            PRINT *, "ERROR: Could not create final output file: ", TRIM(filename)
+            STOP 1
         END IF
 
         ! Write dynamic header
@@ -2971,7 +2971,7 @@ contains
         ! 4. Safely close the file
         CLOSE(f_unit)
 
-        PRINT *, "✅ Final Pareto front successfully saved to: ", TRIM(filename)
+        PRINT *, "Final Pareto front successfully saved to: ", TRIM(filename)
 
     END SUBROUTINE save_final_pareto
 
@@ -3023,8 +3023,8 @@ contains
 
             OPEN(NEWUNIT=f_unit, FILE=TRIM(filename), STATUS='REPLACE', IOSTAT=ios)
             IF (ios /= 0) THEN
-                PRINT *, "🔴 ERROR: Could not create animation file: ", TRIM(filename)
-                STOP
+                PRINT *, "ERROR: Could not create animation file: ", TRIM(filename)
+                STOP 1
             END IF
 
             ! --- Write Dynamic Header ---
@@ -3062,7 +3062,7 @@ contains
             CLOSE(f_unit)
             DEALLOCATE(ws_out) ! Clear memory for the next objective
 
-            PRINT *, "    ✅ Saved: ", TRIM(filename)
+            PRINT *, "    Saved: ", TRIM(filename)
         END DO
 
         PRINT *, "----------------------------------------------------"
@@ -3131,7 +3131,7 @@ contains
 
         IF (gen_num == 1) THEN
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='REPLACE', IOSTAT=ios)
-            IF (ios /= 0) STOP " ERROR: Could not create SOGA convergence file."
+            IF (ios /= 0) ERROR STOP " ERROR: Could not create SOGA convergence file."
             WRITE(f_unit, '(A)') 'generation,best_fitness,raw_cost,raw_aep,LCOE,raw_fatigue,soft_aep_violation,soft_capex_violation,penalty_aep,penalty_capex,penalty_lcoe'
         ELSE
             OPEN(NEWUNIT=f_unit, FILE=filename, STATUS='OLD', POSITION='APPEND', IOSTAT=ios)
@@ -3176,7 +3176,7 @@ contains
         WRITE(f_unit, *)
 
         CLOSE(f_unit)
-        PRINT *, "✅ Best SOGA layout saved to: ", TRIM(filename)
+        PRINT *, "Best SOGA layout saved to: ", TRIM(filename)
     END SUBROUTINE soga_save_best_layout
 
     ! ==================================================================
@@ -3223,7 +3223,7 @@ contains
 
         CLOSE(f_unit)
         DEALLOCATE(ws_out)
-        PRINT *, "    ✅ Saved: ./outputs/animation_data_soga.csv"
+        PRINT *, "    Saved: ./outputs/animation_data_soga.csv"
         PRINT *, "----------------------------------------------------"
     END SUBROUTINE soga_save_animation_data
 

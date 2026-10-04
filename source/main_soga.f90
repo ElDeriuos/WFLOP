@@ -57,7 +57,7 @@ PROGRAM run_soga
 
         ! If stall tolerance is positive and we've exceeded it, break early
         IF (config%soga_stall > 0 .AND. stall_count >= config%soga_stall) THEN
-            PRINT *, "🔶 Early stopping triggered: no improvement for ", stall_count, " generations."
+            PRINT *, "Early stopping triggered: no improvement for ", stall_count, " generations."
             EXIT
         END IF
 

@@ -10,8 +10,8 @@ MOGA_MAIN_OBJ = $(BUILD)/main_moga.o
 SIM_EXE = $(BUILD)/simulator
 SOGA_EXE = $(BUILD)/soga_optimizer
 MOGA_EXE = $(BUILD)/moga_optimizer
-# Legacy mesher; the GUI runs it from source/
-POLY_EXE = source/polygon3
+# Legacy mesher, run by the GUI's mesh step
+POLY_EXE = $(BUILD)/polygon3
 
 .PHONY: all simulator soga_optimizer moga_optimizer polygon3 clean
 
@@ -52,9 +52,9 @@ $(SOGA_EXE): $(CORE_OBJ) $(SOGA_MAIN_OBJ)
 $(MOGA_EXE): $(CORE_OBJ) $(MOGA_MAIN_OBJ)
 	$(FC) $(FFLAGS) -o $@ $^
 
-$(POLY_EXE): source/polygon3.for
+$(POLY_EXE): source/polygon3.for | $(BUILD)
 	$(FC) -ffixed-form -fno-automatic -O3 -fopenmp $< -o $@
 
 clean:
-	rm -rf $(BUILD) $(POLY_EXE)
+	rm -rf $(BUILD)
 	rm -f source/*.mod source/*.mod0

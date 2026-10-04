@@ -141,7 +141,7 @@ This creates:
 build/simulator
 build/soga_optimizer
 build/moga_optimizer
-source/polygon3        # used by the GUI's mesh step
+build/polygon3         # used by the GUI's mesh step
 ```
 
 Build individual targets with:
@@ -153,7 +153,7 @@ make moga_optimizer
 make polygon3
 ```
 
-The GUI’s **Compile SOGA/MOGA** buttons use a separate direct command and place the resulting optimizer in `source/` (`source/soga_optimizer` or `source/moga_optimizer`). The GUI expects to be launched from the repository root because its paths are relative to the current working directory:
+The GUI’s **Compile** buttons (SOGA, NSGA-II and Simulator tabs) call `gfortran` directly with their own debug/fast flags, but write to the same `build/` folder the GUI runs programs from. The GUI expects to be launched from the repository root because its paths are relative to the current working directory:
 
 ```bash
 python main.py
@@ -176,7 +176,7 @@ Select one or more KML files and set `dx` and `dy` in metres. `mesh_generator.py
 3. identifies the largest polygon as the macro-boundary;
 4. shifts coordinates so the minimum projected `x` and `y` are zero;
 5. writes `xycoordinates.txt` and `Polygon_project.txt`/`polygon_project.txt`;
-6. executes `source/polygon3` (or `polygon3.exe` on Windows); and
+6. executes `build/polygon3` (or `polygon3.exe` on Windows); and
 7. stores UTM metadata in `inputs/mesh_metadata.json`.
 
 `polygon3` rasterizes the polygon edges at the requested spacing and writes `inputs/windfarm_rocol.txt`, which contains candidate node coordinates and element/connectivity records. Nodes are the chromosome positions used by the optimizer.
@@ -314,7 +314,7 @@ The evaluator lazily runs only the required expensive modules: CAPEX is needed f
 
 The GUI controls are initially SOGA generation `100`, population `50`, crossover `0.50`, mutation `0.50`, mutation step `0.08`, and stall tolerance `50`.
 
-Run from the GUI after building `source/soga_optimizer`, or directly with:
+Run from the GUI after building `build/soga_optimizer`, or directly with:
 
 ```bash
 ./build/soga_optimizer
@@ -336,7 +336,7 @@ MOGA maps both selected objectives to minimization values, then applies Deb-styl
 
 The GUI prevents the two objective selectors from being identical. The initial GUI defaults are generation `200`, population `100`, crossover `0.50`, mutation `0.50`, and mutation step `0.08`.
 
-Run from the GUI after building `source/moga_optimizer`, or directly with:
+Run from the GUI after building `build/moga_optimizer`, or directly with:
 
 ```bash
 ./build/moga_optimizer
@@ -496,7 +496,7 @@ The simulator re-evaluates layouts using the chronological wind data in `filtere
 
 It discovers `gene_1` through `gene_N` by header name, so metadata columns before the genes are ignored. Gene order must match mesh node order. Coordinates stored in the CSV are not used by the parser.
 
-Build and run:
+Run from the GUI's **Simulator** tab, or build and run directly:
 
 ```bash
 make simulator
@@ -513,7 +513,7 @@ make simulator
 
 Selectors are 1-based data-row numbers after the CSV header. `solution_id` is the position in the selected list; `source_row` preserves the original CSV row number.
 
-The simulator forces time-series mode while retaining paths and physics settings from `config.inp`. It recalculates financial cost, wake/power physics, AEP, and fatigue. It does not calculate electrical array output.
+The simulator forces time-series mode, so `filtered_wind.txt` must exist even when `config.inp` uses wind-rose mode. From `config.inp` it reads only the input file paths (turbine, mesh, time-series wind, bathymetry, distances), the output folder and `workability` (installation cost). GA settings, objectives, turbine-count limits and soft constraints are ignored. It recalculates financial cost, wake/power physics, AEP, and fatigue. It does not calculate electrical array output.
 
 Generated files are:
 
@@ -522,7 +522,7 @@ Generated files are:
 - `simulation_turbines.csv`: per-installed-turbine aggregate power, speed, turbulence, `Ct`, and thrust; and
 - `simulation_summary.json`: JSON form of the aggregate summaries.
 
-The simulator skips malformed, out-of-range, or empty layouts with warnings where possible. A wake iteration that does not converge by `max_iter` produces a warning and uses its last state.
+Before writing any output, the simulator checks every selected row. It stops with a non-zero exit code and an error message if a requested row does not exist, a gene is not a valid turbine type, a row has no turbines, or the CSV has fewer gene columns than mesh nodes. A wake iteration that does not converge by `max_iter` produces a warning and uses its last state.
 
 ---
 

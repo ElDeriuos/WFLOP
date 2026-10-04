@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 markers = [
     "integration: builds and runs the Fortran simulator",
 ]

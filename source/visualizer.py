@@ -81,9 +81,10 @@ def _get_moga_objectives():
     try:
         with open('./inputs/config.inp', 'r') as f:
             lines = f.readlines()
-            # config order: ... workability, mode, objective 1, objective 2
-            obj1_id = int(lines[10].strip())
-            obj2_id = int(lines[11].strip())
+            # config order: ... workability, mode, objective 1, objective 2.
+            # Each line is "value ! comment"; the value is the first token.
+            obj1_id = int(lines[10].split()[0])
+            obj2_id = int(lines[11].split()[0])
             return mapping[obj1_id], mapping[obj2_id]
     except Exception:
         return mapping[2], mapping[3] # Fallback
@@ -180,7 +181,7 @@ def save_pareto_plots(output_dir='./outputs'):
     plt.savefig(out_final, dpi=300, bbox_inches='tight', format='png')
     plt.close()
     
-    print("✅ Saved evolution and final Pareto plots.")
+    print("Saved evolution and final Pareto plots.")
     return True
 # =====================================================================
 # MODULE 2: PYVISTA 3D VISUALIZATION
@@ -564,10 +565,10 @@ def generate_mp4_animation(file_path, level_idx=1, fast_mode=False, frame_step=1
         # Passed via the fps argument down into the ffmpeg writer
         # ------------------------------------------------------------------
         ani.save(output_filename, writer='ffmpeg', fps=fps, dpi=150)
-        print(f"✅ Saved: {output_filename}")
+        print(f"Saved: {output_filename}")
         return output_filename
     except Exception as e:
-        print(f"🔴 Failed to save MP4: {e}")
+        print(f"Failed to save MP4: {e}")
         return None
         
 # =====================================================================
@@ -783,10 +784,10 @@ def generate_soga_mp4_animation(file_path='./outputs/animation_data_soga.csv', l
     try:
         # Pass the user-defined FPS here
         ani.save(output_filename, writer='ffmpeg', fps=fps, dpi=150)
-        print(f"✅ Saved: {output_filename}")
+        print(f"Saved: {output_filename}")
         return output_filename
     except Exception as e:
-        print(f"🔴 Failed to save MP4: {e}")
+        print(f"Failed to save MP4: {e}")
         return None
 
 def plot_wind_rose(json_path="./inputs/wind_analytics.json"):
@@ -794,7 +795,7 @@ def plot_wind_rose(json_path="./inputs/wind_analytics.json"):
     Generates a polar stacked histogram (Wind Rose) from binned ERA5 data.
     """
     if not os.path.exists(json_path):
-        print(f"🔴 ERROR: Analytics data file not found at {json_path}. Process wind data first.")
+        print(f"ERROR: Analytics data file not found at {json_path}. Process wind data first.")
         return False
 
     with open(json_path, 'r', encoding='utf-8') as f:
@@ -890,7 +891,7 @@ def plot_wind_speed_diagnostics(json_path="./inputs/wind_analytics.json"):
     Renders an integrated speed diagnostics plot overlaying a histogram and Weibull fit.
     """
     if not os.path.exists(json_path):
-        print(f"🔴 ERROR: Analytics data file not found at {json_path}. Process wind data first.")
+        print(f"ERROR: Analytics data file not found at {json_path}. Process wind data first.")
         return False
 
     with open(json_path, 'r', encoding='utf-8') as f:

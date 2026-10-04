@@ -14,7 +14,7 @@ Always run from the repository root — the GUI, Python modules, and Fortran exe
 uv sync                      # Python deps (requires Python >=3.14)
 python main.py               # launch the GUI (needs a display)
 
-make all                     # build/simulator, build/soga_optimizer, build/moga_optimizer, source/polygon3
+make all                     # build/simulator, build/soga_optimizer, build/moga_optimizer, build/polygon3
 make soga_optimizer          # or: simulator, moga_optimizer
 make clean
 
@@ -27,13 +27,11 @@ uv run pytest tests/test_wake_growth_rate.py -v        # single file
 uv run pytest -m integration tests/                    # tests that build + run the Fortran simulator
 ```
 
-Note: the `tests/` directory currently contains only `__pycache__` in the working tree; the test sources are not checked in.
-
-Two separate build paths exist: the `Makefile` builds into `build/`, while the GUI's "Compile SOGA/MOGA" buttons invoke `gfortran` directly (`main.py` ~line 1185) and place binaries in `source/` (`source/soga_optimizer`, `source/moga_optimizer`), which is where the GUI runs them from. GUI debug flags: `-Wall -Wextra -g -O0 -fcheck=all -fbacktrace -fopenmp`; fast: `-O3 -fopenmp`. Binaries are not tracked in git; `make polygon3` is required before the GUI's mesh step works.
+All Fortran binaries live in `build/`: the `Makefile` builds there, and the GUI's Compile buttons (`run_compiler` in `main.py`) invoke `gfortran` directly with `-J build` and write there too (module files in `build/mod_<target>/`). The GUI runs every program from `build/` via `fortran_exe()`. GUI debug flags: `-Wall -Wextra -g -O0 -fcheck=all -fbacktrace -fopenmp`; fast: `-O3 -fopenmp`. Binaries are not tracked in git; `make polygon3` is required before the GUI's mesh step works.
 
 ## Architecture
 
-**Pipeline:** KML polygons → `source/mesh_generator.py` (projects to UTM, shifts to origin, runs the legacy `source/polygon3` Fortran mesher → `inputs/windfarm_rocol.txt` + `inputs/mesh_metadata.json`) → `bathymetry_generator.py` (GEBCO `.asc` → `inputs/farm_bathymetry.dat`) → `wind_generator.py` (ERA5 NetCDF → either `filtered_wind.txt` time series or `wind_rose_matrix.dat` + `wind_analytics.json`) → `distance_calculator.py` (`site_distances.txt`) → GUI writes `inputs/config.inp` → Fortran optimizer → CSVs in `outputs/` → `visualizer.py` (matplotlib plots, PyVista 3-D, ffmpeg MP4s).
+**Pipeline:** KML polygons → `source/mesh_generator.py` (projects to UTM, shifts to origin, runs the legacy `build/polygon3` Fortran mesher → `inputs/windfarm_rocol.txt` + `inputs/mesh_metadata.json`) → `bathymetry_generator.py` (GEBCO `.asc` → `inputs/farm_bathymetry.dat`) → `wind_generator.py` (ERA5 NetCDF → either `filtered_wind.txt` time series or `wind_rose_matrix.dat` + `wind_analytics.json`) → `distance_calculator.py` (`site_distances.txt`) → GUI writes `inputs/config.inp` → Fortran optimizer → CSVs in `outputs/` → `visualizer.py` (matplotlib plots, PyVista 3-D, ffmpeg MP4s).
 
 The mesh step must run first: every later step indexes by mesh node, and `mesh_metadata.json` holds the UTM zone/offset needed to map nodes back to WGS 84.
 

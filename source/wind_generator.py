@@ -71,7 +71,7 @@ def process_wind_data(nc_dir, filters, output_callback=print):
     chunk_size = 1000
 
     if not os.path.exists(rocol_file) or not os.path.exists(metadata_file):
-        output_callback("🔴 ERROR: Mesh files missing. Generate the mesh first.")
+        output_callback("ERROR: Mesh files missing. Generate the mesh first.")
         return False
 
     output_callback("--- Starting Wind Data Generation ---")
@@ -82,7 +82,7 @@ def process_wind_data(nc_dir, filters, output_callback=print):
 
     rel_x, rel_y, n_nodes = read_rocol_mesh(rocol_file)
     if n_nodes is None:
-        output_callback("🔴 ERROR: Could not parse windfarm_rocol.txt")
+        output_callback("ERROR: Could not parse windfarm_rocol.txt")
         return False
 
     # 2. Project Coordinates to Lat/Lon for NetCDF Slicing
@@ -101,7 +101,7 @@ def process_wind_data(nc_dir, filters, output_callback=print):
     output_callback(f"2. Scanning directory '{os.path.basename(nc_dir)}' for .nc files...")
     nc_files = sorted([os.path.join(nc_dir, f) for f in os.listdir(nc_dir) if f.endswith('.nc')])
     if not nc_files:
-        output_callback("🔴 ERROR: No .nc files found in the selected folder.")
+        output_callback("ERROR: No .nc files found in the selected folder.")
         return False
 
     try:
@@ -117,7 +117,7 @@ def process_wind_data(nc_dir, filters, output_callback=print):
 
         ds = xr.concat(datasets, dim="valid_time")
     except Exception as e:
-        output_callback(f"🔴 ERROR: Failed to combine NetCDF files: {e}")
+        output_callback(f"ERROR: Failed to combine NetCDF files: {e}")
         return False
 
     # 4. Apply Spatial and Temporal Filters
@@ -137,7 +137,7 @@ def process_wind_data(nc_dir, filters, output_callback=print):
 
     n_steps = ds.sizes['valid_time']
     if n_steps == 0:
-        output_callback("🔴 ERROR: Time filters resulted in 0 valid time steps.")
+        output_callback("ERROR: Time filters resulted in 0 valid time steps.")
         return False
 
     output_callback(f"   Filtered from {original_steps} to {n_steps} target time steps.")
@@ -272,7 +272,7 @@ def process_wind_data(nc_dir, filters, output_callback=print):
 
                 output_callback(f"  > Wrote chunk {i+1}/{num_chunks}")
 
-        output_callback("✅ SUCCESS: filtered_wind.txt is ready for the optimizer!")
+        output_callback("SUCCESS: filtered_wind.txt is ready for the optimizer!")
 
         # FIX 4: Explicitly close the datasets to free up Linux RAM
         ds.close()
@@ -282,5 +282,5 @@ def process_wind_data(nc_dir, filters, output_callback=print):
         return True
 
     except Exception as e:
-        output_callback(f"🔴 ERROR writing final text file: {e}")
+        output_callback(f"ERROR writing final text file: {e}")
         return False
