@@ -41,3 +41,6 @@ geom3.dat
 # Run outputs
 outputs/*
 !outputs/.gitkeep
+
+# PyInstaller output
+dist/

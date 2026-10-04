@@ -12,6 +12,21 @@ import re
 import subprocess
 
 # =====================================================================
+# WORKING DIRECTORY
+# =====================================================================
+# All paths in the app (./inputs, ./outputs, ./source) are relative to the
+# project folder. Anchor the working directory there so the app works when
+# launched from anywhere, including as a PyInstaller bundle where the folder
+# is the one containing the executable.
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(sys.executable)
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(APP_DIR)
+os.makedirs("inputs", exist_ok=True)
+os.makedirs("outputs", exist_ok=True)
+
+# =====================================================================
 # DESIGN: GLOBAL THEME CONFIGURATION
 # =====================================================================
 # appearance_mode options: "System" (follows OS), "Dark", "Light"
