@@ -1,0 +1,83 @@
+name: Release
+
+# Builds standalone WFLOP bundles for Linux and Windows and attaches them to a
+# GitHub Release. Trigger by pushing a version tag:
+#     git tag v1.0.0 && git push origin v1.0.0
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    # Older Ubuntu = older glibc = runs on more Linux distributions
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gfortran
+        run: sudo apt-get update && sudo apt-get install -y gfortran make
+
+      - name: Build Fortran programs
+        run: make all
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Build bundle
+        run: |
+          uv sync
+          uv run pyinstaller wflop.spec --noconfirm
+          cd dist && tar -czf ../WFLOP-linux-x86_64.tar.gz WFLOP
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WFLOP-linux
+          path: WFLOP-linux-x86_64.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: make mingw-w64-x86_64-gcc-fortran
+
+      - name: Build Fortran programs
+        shell: msys2 {0}
+        run: make all
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Build bundle
+        shell: pwsh
+        run: |
+          uv sync
+          uv run pyinstaller wflop.spec --noconfirm
+          Compress-Archive -Path dist/WFLOP -DestinationPath WFLOP-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WFLOP-windows
+          path: WFLOP-windows-x86_64.zip
+
+  release:
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            WFLOP-linux-x86_64.tar.gz
+            WFLOP-windows-x86_64.zip
+          generate_release_notes: true

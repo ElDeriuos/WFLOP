@@ -15,6 +15,20 @@ The repository supports both single-objective genetic optimization (SOGA) and mu
 
 ---
 
+## Quick start (pre-built version)
+
+No Python installation is needed.
+
+1. Install the external tools: **gfortran** (on Windows, MSYS2/MinGW-w64) and **FFmpeg**, and make sure both are on your `PATH`.
+2. Download `WFLOP-windows-x86_64.zip` or `WFLOP-linux-x86_64.tar.gz` from the [Releases page](https://github.com/ElDeriuos/WFLOP/releases) and extract it to a folder you can write to (not `Program Files`).
+3. Run `WFLOP.exe` (Windows) or `./WFLOP` (Linux).
+
+The optimizers come prebuilt in the `source/` folder, so you can skip the **Compile** buttons. Generated inputs are written to `inputs/` and results to `outputs/` inside the extracted folder.
+
+To build the bundle yourself: `make all && uv run pyinstaller wflop.spec --noconfirm` (output in `dist/WFLOP/`).
+
+---
+
 ## 1. Workflow at a glance
 
 ```text

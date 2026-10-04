@@ -21,3 +21,8 @@ dependencies = [
 markers = [
     "integration: builds and runs the Fortran simulator",
 ]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.3",
+]

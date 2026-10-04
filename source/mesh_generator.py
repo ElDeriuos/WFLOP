@@ -133,6 +133,22 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
         binary_path = './source/polygon3'
         output_callback("Executing polygon3 mesh generator natively in Linux/WSL...")
     
+    # Build polygon3 on first use if no prebuilt binary is present
+    if not os.path.exists(binary_path):
+        output_callback("polygon3 not found; compiling it with gfortran...")
+        try:
+            subprocess.run(
+                ["gfortran", "-ffixed-form", "-fno-automatic", "-O3", "-fopenmp",
+                 "./source/polygon3.for", "-o", binary_path],
+                check=True, capture_output=True, text=True
+            )
+        except FileNotFoundError:
+            output_callback("🔴 ERROR: 'gfortran' not found. Install gfortran and make sure it is on your PATH.")
+            return None
+        except subprocess.CalledProcessError as e:
+            output_callback(f"🔴 ERROR: compiling polygon3 failed:\n{e.stderr.strip()}")
+            return None
+
     # Give the file executable permissions for the user (Handled gracefully by OS)
     if os.path.exists(binary_path):
         st = os.stat(binary_path)
