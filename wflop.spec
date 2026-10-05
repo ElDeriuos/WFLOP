@@ -82,9 +82,19 @@ exe = EXE(
     console=False,
 )
 
-# Linux libraries ship with debug symbols (libvtkCommonCore: 150 MB -> 87 MB stripped).
+coll = COLLECT(exe, a.binaries, a.datas, name="WFLOP")
+
+# Linux VTK libraries carry full symbol tables (libvtkCommonCore: 150 MB -> 87 MB
+# stripped). Only vtkmodules is stripped: the libraries auditwheel vendored into
+# numpy.libs/scipy.libs were rewritten by patchelf, and older binutils (Ubuntu
+# 22.04) corrupt those when stripping ("ELF load command ... not page-aligned").
 # Not on macOS (would invalidate code signatures) or Windows (no symbols in DLLs).
-coll = COLLECT(exe, a.binaries, a.datas, strip=sys.platform.startswith("linux"), name="WFLOP")
+if sys.platform.startswith("linux"):
+    import glob
+    import subprocess
+    vtk_dir = os.path.join(DISTPATH, "WFLOP", "_internal", "vtkmodules")
+    for lib in glob.glob(os.path.join(vtk_dir, "*.so*")):
+        subprocess.run(["strip", "--strip-unneeded", lib], check=True)
 
 # ---------------------------------------------------------------------------
 # Runtime folders: the app works relative to its own folder (see main.py).

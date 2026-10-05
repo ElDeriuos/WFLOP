@@ -108,6 +108,11 @@ jobs:
           uv run pyinstaller wflop.spec --noconfirm
           Compress-Archive -Path dist/WFLOP -DestinationPath WFLOP-windows-x86_64.zip
 
+      # GitHub's Windows runners have no GPU and only OpenGL 1.1, too old for
+      # VTK (the render aborts the process). This installs Mesa's software
+      # OpenGL, as pyvista's own CI does. Users' machines have real drivers.
+      - uses: pyvista/setup-headless-display-action@v4
+
       # WFLOP.exe is a windowed app, so read its exit code and log explicitly
       - name: Self-test the bundle
         shell: pwsh

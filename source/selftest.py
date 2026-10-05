@@ -76,6 +76,8 @@ def run():
             if sys.stdout:
                 print(text, flush=True)
         for name, check in checks:
+            # Logged first, so a native crash inside a check still shows which one
+            report(f"RUN   {name}")
             try:
                 check()
                 report(f"PASS  {name}")
