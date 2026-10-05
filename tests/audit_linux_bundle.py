@@ -23,7 +23,7 @@ SYSTEM_LIBS = [
     "libstdc++.so*", "libgcc_s.so*", "libobjc.so*",
     "libGL.so*", "libGLX*", "libGLdispatch*", "libOpenGL*", "libEGL*", "libGLES*",
     "libdrm*", "libgbm*", "libglapi*",
-    "libX11*", "libxcb.so*", "libxcb-*.so*", "libXau.so*", "libXdmcp*", "libXext*",
+    "libX11*", "libxcb.so*", "libxcb-*.so*", "libXau.so*", "libXdmcp*", "libbsd.so*", "libmd.so*", "libXext*",
     "libXrender*", "libXss*", "libXi.*", "libXfixes*", "libXrandr*", "libXcursor*",
     "libXinerama*", "libXcomposite*", "libXdamage*", "libxkbcommon*",
     "libfontconfig*", "libfreetype*", "libharfbuzz*", "libgraphite2*", "libpng16*",

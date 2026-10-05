@@ -76,7 +76,9 @@ def run():
     """Runs every check. Each result is appended to selftest.log as soon as it is
     known, with the full traceback on failure, so even a crash leaves a report."""
     checks = [("Fortran programs", lambda: _check_fortran(_exe_for)), ("ffmpeg (MP4 export)", _check_ffmpeg),
-              ("VTK (3D viewer)", _check_vtk), ("GUI (Tk window)", _check_gui)]
+              ("GUI (Tk window)", _check_gui), ("VTK (3D viewer)", _check_vtk)]
+    # GUI before VTK, as in the app: on macOS, Tk must create the NSApplication
+    # (its TKApplication subclass); one created first by VTK crashes Tk.
     ok = True
     with open("selftest.log", "w") as log:
         def report(text):
