@@ -42,6 +42,20 @@ Generated inputs are written to `inputs/` and results to `outputs/` inside the e
 
 To build the bundle yourself: `make all STATIC=1 && uv run pyinstaller wflop.spec --noconfirm` (output in `dist/WFLOP/`).
 
+### System requirements (pre-built version)
+
+| System | Requirement |
+|---|---|
+| Linux | x86-64 with glibc 2.35 or newer and a desktop (X11 or Wayland with XWayland): Ubuntu 22.04+, Debian 12+, Fedora 36+, Linux Mint 21+, Arch, openSUSE Tumbleweed. Not RHEL/Rocky 8–9, Ubuntu 20.04 or Debian 11 (glibc too old), and not Alpine (no glibc). |
+| Windows | Windows 10 or 11, 64-bit. Unsigned app: on first launch, SmartScreen asks to confirm ("More info", then "Run anyway"). |
+| macOS | macOS 14 (Sonoma) or newer on Apple Silicon (M1 and later). Intel Macs are not supported. |
+| All | A graphics driver with OpenGL 3.2 or newer for the 3-D viewer. Any GPU from the last decade has one; virtual machines need 3D acceleration turned on. |
+
+#### How the bundles stay portable (for maintainers)
+
+- **Linux:** a bundle contains only libraries from Python wheels, plus Python itself and Tk. Libraries tied to the user's system (the C/C++ runtime, OpenGL/Mesa, X11, fonts) always come from that system. `wflop.spec` enforces this: a system library that is in neither `BUNDLE_LIBS` (`wflop.spec`) nor `SYSTEM_LIBS` (`tests/audit_linux_bundle.py`) stops the build. After the build, `tests/audit_linux_bundle.py` checks that no file needs a newer glibc than 2.35 or libstdc++ than GLIBCXX 3.4.30 (Ubuntu 22.04, the build machine and oldest supported system).
+- **Every platform:** a bundle is built on the oldest supported system (Ubuntu 22.04, Windows Server 2022, macOS 14). The release workflow then runs `WFLOP --self-test` (Fortran programs, MP4 export, 3-D render, GUI window) in clean Ubuntu 22.04/24.04, Debian 12, Fedora, Arch and openSUSE containers, on Windows Server 2022 and 2025, and on macOS 14 and 15. The release is published only if every run passes. `tests/ci/selftest_in_container.sh` runs the same Linux check locally with Docker or Podman.
+
 ---
 
 ## 1. Workflow at a glance

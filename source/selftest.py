@@ -63,11 +63,20 @@ def _exe_for(name):
     return os.path.join(os.getcwd(), "build", name + (".exe" if sys.platform == "win32" else ""))
 
 
+def _check_gui():
+    # Opens and closes the real GUI toolkit window: catches broken Tk, X11 or font libraries
+    import customtkinter as ctk
+    window = ctk.CTk()
+    ctk.CTkLabel(window, text="self-test").pack()
+    window.update()
+    window.destroy()
+
+
 def run():
     """Runs every check. Each result is appended to selftest.log as soon as it is
     known, with the full traceback on failure, so even a crash leaves a report."""
     checks = [("Fortran programs", lambda: _check_fortran(_exe_for)), ("ffmpeg (MP4 export)", _check_ffmpeg),
-              ("VTK (3D viewer)", _check_vtk)]
+              ("VTK (3D viewer)", _check_vtk), ("GUI (Tk window)", _check_gui)]
     ok = True
     with open("selftest.log", "w") as log:
         def report(text):

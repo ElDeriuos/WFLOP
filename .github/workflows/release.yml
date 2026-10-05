@@ -1,6 +1,7 @@
 name: Release
 
-# Builds standalone WFLOP bundles for Linux and Windows and attaches them to a
+# Builds standalone WFLOP bundles for Linux, Windows and macOS, self-tests them
+# on several versions of each, and attaches them to a
 # GitHub Release. Trigger by pushing a version tag:
 #     git tag v1.0.0 && git push origin v1.0.0
 
@@ -61,6 +62,23 @@ jobs:
       - name: Self-test the bundle
         run: xvfb-run -a dist/WFLOP/WFLOP --self-test
 
+      # Static check: no bundled system libraries (C++ runtime, OpenGL, X11,
+      # fonts) and nothing needs a newer glibc/libstdc++ than Ubuntu 22.04 has
+      - name: Audit bundle for portability
+        run: python3 tests/audit_linux_bundle.py dist/WFLOP
+
+      # Same self-test on clean containers of other distributions, old and new;
+      # catches bundled libraries that clash with their system libraries
+      - name: Self-test the bundle on other distributions
+        run: |
+          for image in ubuntu:22.04 ubuntu:24.04 debian:12 fedora:latest archlinux:latest opensuse/tumbleweed; do
+            echo "::group::$image"
+            docker run --rm -v "$PWD/dist/WFLOP:/app" -v "$PWD/tests/ci:/ci" -w /app "$image" \
+              bash /ci/selftest_in_container.sh \
+              || { echo "::endgroup::"; echo "::error::self-test failed on $image"; exit 1; }
+            echo "::endgroup::"
+          done
+
       - name: Check bundled Tk uses Xft (anti-aliased rendering)
         run: |
           internal=dist/WFLOP/_internal
@@ -76,7 +94,8 @@ jobs:
           path: WFLOP-linux-x86_64.tar.gz
 
   windows:
-    runs-on: windows-latest
+    # Oldest supported Windows Server (Windows 10 base); tested on newer below
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -108,6 +127,28 @@ jobs:
           uv run pyinstaller wflop.spec --noconfirm
           Compress-Archive -Path dist/WFLOP -DestinationPath WFLOP-windows-x86_64.zip
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WFLOP-windows
+          path: WFLOP-windows-x86_64.zip
+
+  # Self-test the released zip on Windows Server 2022 (Windows 10 base) and
+  # 2025 (Windows 11 base), on machines that never had gfortran or Python
+  test-windows:
+    needs: windows
+    strategy:
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: WFLOP-windows
+
+      - name: Extract bundle
+        shell: pwsh
+        run: Expand-Archive WFLOP-windows-x86_64.zip -DestinationPath .
+
       # GitHub's Windows runners have no GPU and only OpenGL 1.1, too old for
       # VTK (the render aborts the process). This installs Mesa's software
       # OpenGL, as pyvista's own CI does. Users' machines have real drivers.
@@ -117,19 +158,15 @@ jobs:
       - name: Self-test the bundle
         shell: pwsh
         run: |
-          $p = Start-Process dist/WFLOP/WFLOP.exe -ArgumentList '--self-test' -WorkingDirectory dist/WFLOP -Wait -PassThru
-          if (Test-Path dist/WFLOP/selftest.log) { Get-Content dist/WFLOP/selftest.log }
+          $p = Start-Process WFLOP/WFLOP.exe -ArgumentList '--self-test' -WorkingDirectory WFLOP -Wait -PassThru
+          if (Test-Path WFLOP/selftest.log) { Get-Content WFLOP/selftest.log }
           else { Write-Output "::error::No selftest.log: WFLOP.exe exited (code $($p.ExitCode)) before the self-test started" }
           if ($p.ExitCode -ne 0) { exit 1 }
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: WFLOP-windows
-          path: WFLOP-windows-x86_64.zip
-
   macos:
-    # macos-14 and later are Apple Silicon (arm64)
-    runs-on: macos-15
+    # Oldest Apple Silicon runner: the bundle (and the Homebrew libraries in it)
+    # then runs on macOS 14 and later; tested on newer below
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -161,9 +198,6 @@ jobs:
           uv run pyinstaller wflop.spec --noconfirm
           cd dist && tar -czf ../WFLOP-macos-arm64.tar.gz WFLOP
 
-      - name: Self-test the bundle
-        run: dist/WFLOP/WFLOP --self-test
-
       - name: Check bundled Tk uses native Aqua rendering
         run: |
           tkinter_so=$(find dist/WFLOP/_internal -name '_tkinter*.so' | head -1)
@@ -178,8 +212,25 @@ jobs:
           name: WFLOP-macos
           path: WFLOP-macos-arm64.tar.gz
 
+  # Self-test the released archive on the oldest and a newer macOS
+  test-macos:
+    needs: macos
+    strategy:
+      matrix:
+        os: [macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: WFLOP-macos
+
+      - name: Self-test the bundle
+        run: |
+          tar -xzf WFLOP-macos-arm64.tar.gz
+          WFLOP/WFLOP --self-test
+
   release:
-    needs: [linux, windows, macos]
+    needs: [linux, windows, macos, test-windows, test-macos]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:

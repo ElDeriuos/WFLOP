@@ -71,6 +71,50 @@ def _keep_binary(dest):
 
 
 a.binaries = [b for b in a.binaries if _keep_binary(b[0])]
+
+# Linux: which system libraries may be bundled. Libraries from wheels
+# (site-packages) are built to run on any Linux and are always kept. Libraries
+# PyInstaller takes from the build machine's own system (Ubuntu 22.04 in CI) are
+# kept only if listed in BUNDLE_LIBS; those in SYSTEM_LIBS must come from the
+# user's system instead, because they are tied to its GPU driver and desktop
+# (e.g. bundling Ubuntu's old libstdc++ made Fedora's Mesa driver fail and the
+# 3D viewer crash). Any other system library stops the build, so a new
+# dependency needs a deliberate decision. tests/audit_linux_bundle.py checks the
+# result in CI.
+if sys.platform.startswith("linux"):
+    import fnmatch
+    sys.path.insert(0, os.path.join(SPECPATH, "tests"))
+    from audit_linux_bundle import SYSTEM_LIBS, WHEEL_COPY_RE
+
+    BUNDLE_LIBS = [
+        # Python itself and its built-in modules
+        "libpython3*", "*.cpython-3*-*.so",
+        # Tk with Xft (anti-aliased GUI text)
+        "libtcl*", "libtk*", "libtommath*", "libXft*",
+        # Python's own dependencies, whose versions differ between distributions
+        "libffi*", "libmpdec*", "libsqlite3*", "libssl*", "libcrypto*", "libreadline*",
+        "libtinfo*", "libbz2*", "liblzma*", "libzstd*",
+    ]
+
+    def _matches(name, patterns):
+        return any(fnmatch.fnmatch(name, p) for p in patterns)
+
+    kept, unclassified = [], []
+    for entry in a.binaries:
+        name, src = os.path.basename(entry[0]), entry[1]
+        if "site-packages" in src.split(os.sep) or WHEEL_COPY_RE.search(name):
+            kept.append(entry)
+        elif _matches(name, SYSTEM_LIBS):
+            continue
+        elif _matches(name, BUNDLE_LIBS):
+            kept.append(entry)
+        else:
+            unclassified.append(src)
+    if unclassified:
+        raise SystemExit("Unclassified system libraries (add each to BUNDLE_LIBS in wflop.spec "
+                         "or SYSTEM_LIBS in tests/audit_linux_bundle.py):\n  " + "\n  ".join(unclassified))
+    a.binaries = kept
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
