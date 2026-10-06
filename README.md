@@ -226,7 +226,7 @@ Select one or more KML files and set `dx` and `dy` in metres. `mesh_generator.py
 
 `polygon3` rasterizes the polygon edges at the requested spacing and writes `inputs/windfarm_rocol.txt`, which contains candidate node coordinates and element/connectivity records. Nodes are the chromosome positions used by the optimizer.
 
-The current implementation preserves intermediate mesh files for inspection. Run this step before bathymetry, wind, or distance processing.
+After the run, the temporary files of this step (`xycoordinates.txt`, the project files, `windfarm_2.plt`, `t`, `t2.dat`, `geom3.dat`) are deleted; only `inputs/windfarm_rocol.txt`, `inputs/mesh_metadata.json` and `outputs/windfarm_1.plt` remain. Run this step before bathymetry, wind, or distance processing.
 
 ### 4.2 Bathymetry
 
