@@ -23,8 +23,8 @@ make clean
 ./build/simulator inputs/config.inp outputs/final_pareto_front.csv all   # or row selector like 1,4,7
 
 uv run pytest tests/                                   # full suite
-uv run pytest tests/test_wake_growth_rate.py -v        # single file
-uv run pytest -m integration tests/                    # tests that build + run the Fortran simulator
+uv run pytest tests/test_config_format.py -v          # single file
+uv run pytest -m integration tests/                    # tests that build + run the Fortran programs
 ```
 
 All Fortran binaries live in `build/`: the `Makefile` builds there (`make all STATIC=1` for releases links the GCC runtime statically), and the GUI's single Compile button per tab (`run_compiler` in `main.py`) invokes `gfortran -O3 -march=native -funroll-loops -flto -fopenmp` directly, with module files in `build/mod_<target>/`. The GUI runs every program from `build/` via `fortran_exe()`; `refresh_program_buttons()` disables Compile without gfortran and Run without the binary. Binaries are not tracked in git; the mesh step builds `build/polygon3` on first use. `WFLOP --self-test` (`source/selftest.py`) checks an install; `wflop.spec` trims VTK to `VTK_KEEP` and, on Linux, bundles system libraries only if listed in `BUNDLE_LIBS` (desktop/driver libraries in `SYSTEM_LIBS`, `tests/audit_linux_bundle.py`, always come from the user's system; unlisted ones stop the build). The release workflow builds on the oldest supported OS of each platform and self-tests on several distributions/versions (`tests/ci/selftest_in_container.sh`) before publishing.

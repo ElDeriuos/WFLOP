@@ -11,6 +11,8 @@ The program was developed for a thesis study of offshore layout design in which 
 
 The repository supports both single-objective genetic optimization (SOGA) and multi-objective NSGA-II (MOGA). It also provides a chronological wind time-series simulator for validating layouts produced by the optimizer.
 
+![WFLOP desktop app running an NSGA-II multi-objective optimization, with the live console streaming each generation](docs/images/gui-nsga2.png)
+
 > **Research scope.** WFLOP is intended for preliminary engineering studies and thesis reproducibility. Its analytical wake, fatigue, cost, and weather models are not a replacement for CFD/LES, aeroelastic, hydrodynamic, geotechnical, or bankable financial analysis.
 
 ---
@@ -36,7 +38,7 @@ What the bundle contains:
 
 The **Compile** buttons are only needed after editing the Fortran sources. Without gfortran on `PATH` they are disabled and the prebuilt programs are used. A **Run** button is disabled while its program is missing from `build/`.
 
-To check an install, run `WFLOP --self-test` (on Windows: `WFLOP.exe --self-test`). It confirms that the Fortran programs start, an MP4 can be written, and the 3-D viewer renders, then writes the result to `selftest.log`. The release workflow runs it on every platform.
+To check an install, run `WFLOP --self-test` (on Windows: `WFLOP.exe --self-test`). It confirms that the Fortran programs start, an MP4 can be written, the GUI window opens and the 3-D viewer renders, then writes the result to `selftest.log`. The release workflow runs it on every platform.
 
 Generated inputs are written to `inputs/` and results to `outputs/` inside the extracted folder.
 
@@ -48,8 +50,8 @@ To build the bundle yourself: `make all STATIC=1 && uv run pyinstaller wflop.spe
 |---|---|
 | Linux | x86-64 with glibc 2.35 or newer and a desktop (X11 or Wayland with XWayland): Ubuntu 22.04+, Debian 12+, Fedora 36+, Linux Mint 21+, Arch, openSUSE Tumbleweed. Not RHEL/Rocky 8–9, Ubuntu 20.04 or Debian 11 (glibc too old), and not Alpine (no glibc). |
 | Windows | Windows 10 or 11, 64-bit. Unsigned app: on first launch, SmartScreen asks to confirm ("More info", then "Run anyway"). |
-| macOS | macOS 14 (Sonoma) or newer on Apple Silicon (M1 and later). Intel Macs are not supported. |
-| All | A graphics driver with OpenGL 3.2 or newer for the 3-D viewer. Any GPU from the last decade has one; virtual machines need 3D acceleration turned on. |
+| macOS | macOS 14 (Sonoma) or newer on Apple Silicon (M1 and later). Intel Macs are not supported. The macOS build passes the automated self-test on macOS 14 and 15 but has not yet been tried by a user on a real Mac; please [open an issue](https://github.com/ElDeriuos/WFLOP/issues) if something does not work. |
+| All | A graphics driver with OpenGL 3.2 or newer for the 3-D viewer. Any GPU from the last decade has one. Virtual machines often lack usable OpenGL (VirtualBox's 3D acceleration crashed the VM in testing); for testing in a Windows VM, put `opengl32.dll` and `libgallium_wgl.dll` from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) next to `WFLOP.exe` to render in software. |
 
 #### How the bundles stay portable (for maintainers)
 
@@ -100,7 +102,7 @@ The GUI runs long preprocessing, compilation, optimization, and rendering action
 | `source/wind_generator.py` | Reads ERA5 NetCDF files, filters/interpolates `u10`/`v10`, writes time-series input, or bins a wind rose. |
 | `source/distance_calculator.py` | Calculates center-to-shore, center-to-grid, and center-to-port distances from KML geometry. |
 | `source/visualizer.py` | Wind-resource plots, Pareto/convergence plots, PyVista layouts, and FFmpeg animations. |
-| `source/selftest.py` | `WFLOP --self-test`: checks the Fortran programs, MP4 export and 3-D rendering of an install. |
+| `source/selftest.py` | `WFLOP --self-test`: checks the Fortran programs, MP4 export, the GUI window and 3-D rendering of an install. |
 | `source/wflop_core.f90` | Fortran types, input loading, cost model, wake/power/fatigue physics, NSGA-II, SOGA, and output writers. |
 | `source/main_soga.f90` | SOGA driver. |
 | `source/main_moga.f90` | NSGA-II driver. |
@@ -133,8 +135,7 @@ The Python dependencies are declared in `pyproject.toml`:
 - `matplotlib`, `pyvista`, `imageio-ffmpeg` (ships its own FFmpeg binary; no system FFmpeg is needed)
 - `xarray`, `netCDF4`
 - `pyproj`
-- `pytest`, `hypothesis`
-- `fortls` for Fortran-language tooling
+- development only (`uv sync` installs them in the `dev` group): `pytest`, `hypothesis`, `fortls` for Fortran-language tooling, `pyinstaller` for the standalone bundle
 
 A typical setup with `uv` is:
 
@@ -197,11 +198,13 @@ The GUI has one yellow **Compile** button on each of the SOGA, NSGA-II and Simul
 
 The Compile buttons are disabled when `gfortran` is not on `PATH`, and a Run button is disabled while its program is missing from `build/`. Both are rechecked on every tab switch and after each compile.
 
-The GUI expects to be launched from the repository root because its paths are relative to the current working directory:
+Start the GUI with:
 
 ```bash
 python main.py
 ```
+
+The GUI switches to its own folder on start, so it can be launched from anywhere. The direct `./build/...` commands below read `./inputs/config.inp` and must be run from the repository root.
 
 ---
 
@@ -223,7 +226,7 @@ Select one or more KML files and set `dx` and `dy` in metres. `mesh_generator.py
 
 `polygon3` rasterizes the polygon edges at the requested spacing and writes `inputs/windfarm_rocol.txt`, which contains candidate node coordinates and element/connectivity records. Nodes are the chromosome positions used by the optimizer.
 
-The current implementation preserves intermediate mesh files for inspection. Run this step before bathymetry, wind, or distance processing.
+After the run, the temporary files of this step (`xycoordinates.txt`, the project files, `windfarm_2.plt`, `t`, `t2.dat`, `geom3.dat`) are deleted; only `inputs/windfarm_rocol.txt`, `inputs/mesh_metadata.json` and `outputs/windfarm_1.plt` remain. Run this step before bathymetry, wind, or distance processing.
 
 ### 4.2 Bathymetry
 
@@ -598,6 +601,8 @@ uv run pytest -m integration tests/   # only the tests that build and run the Fo
 | `tests/test_simulator_bad_rows.py` | The simulator stops with an error, before writing any output, for missing rows and invalid genes. SOGA and NSGA-II read a commented `config.inp`. |
 | `tests/test_visualizer.py` | A tiny real SOGA and NSGA-II run, then every plot, both MP4 animations (with `PATH` emptied, so only the bundled FFmpeg can be used) and both 3-D views rendered offscreen. |
 | `tests/omp_check.f90` | Not a pytest test: built with `make omp_check` to show how many OpenMP threads ran. |
+| `tests/audit_linux_bundle.py` | Not a pytest test: checks a built Linux bundle for bundled system libraries and for files needing a newer glibc/libstdc++ than Ubuntu 22.04 (`python3 tests/audit_linux_bundle.py dist/WFLOP`). |
+| `tests/ci/selftest_in_container.sh` | Not a pytest test: runs `WFLOP --self-test` in a clean Linux container (see the script header for the `docker run` line). |
 
 The integration tests need the preprocessed site files in `inputs/` and skip themselves when those are missing. They write to temporary folders and never touch `outputs/`.
 
@@ -605,14 +610,14 @@ The integration tests need the preprocessed site files in `inputs/` and skip the
 
 ## 10. Reproducibility and limitations
 
-- Launch the GUI and direct executables from the repository root; most paths are relative.
+- Run the direct `./build/...` executables from the repository root (they use relative paths). The GUI works from any folder.
 - Rebuild Fortran binaries after changing compiler, platform, or `.f90` sources.
 - The optimizer is stochastic and clock-seeded.
 - The wind-rose approximation and time-series validation are different operating modes; use the simulator to compare a selected layout with chronological data.
 - The analytical wake model omits near-wake vortex dynamics, wake meandering, transient effects, and full three-dimensional atmospheric coupling.
 - Fatigue is a reduced analytical tower-root/monopile model; it does not replace aeroelastic or detailed structural analysis.
 - Hydrodynamic loading, tides, soil–pile interaction, OPEX, maintenance, failure, discounting, inflation, and decommissioning are not fully represented.
-- These are study-specific inputs, not universal program defaults; if you need to change them, modify the input files or script arguments based on your study's needs.
+- Model constants in the backend (for example the wind-shear exponent `α = 1/7`, air density, the 25-year farm lifetime and the cost-model coefficients) are study-specific values from the thesis, not universal defaults; change them in the Fortran sources or input files to suit your study.
 
 ---
 

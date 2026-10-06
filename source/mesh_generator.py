@@ -164,14 +164,7 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
             text=True
         )
         
-        output_callback("Mesh generation successful. Temporary files are being preserved.")
-
-        # Temporarily disabled to preserve mesh-generator inputs and outputs for inspection.
-        # files_to_remove = [mesh_input_file, 'windfarm_2.plt', 'polygon_project.txt', 't', 't2.dat', 'geom3.dat']
-        # for file in files_to_remove:
-        #     if os.path.exists(file):
-        #         os.remove(file)
-
+        output_callback("Mesh generation successful.")
         output_callback("--- Mesh Pipeline Complete ---")
         
         
@@ -197,3 +190,10 @@ def process_kmls_and_mesh(kml_files, dx, dy, output_callback=print):
         if e.stderr:
             output_callback(f"Fortran Error Log: {e.stderr.strip()}")
         return None
+    finally:
+        # polygon3's inputs and scratch files, written to the working folder. Only
+        # inputs/windfarm_rocol.txt and outputs/windfarm_1.plt are kept.
+        for name in (mesh_input_file, 'Polygon_project.txt', 'polygon_project.txt',
+                     'windfarm_2.plt', 't', 't2.dat', 'geom3.dat'):
+            if os.path.exists(name):
+                os.remove(name)
