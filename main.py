@@ -146,7 +146,7 @@ class OWFLOGui(ctk.CTk):
         self.running_process = None
 
         # --- Main Window Configuration ---
-        self.title("OWFLO: Offshore Wind Farm Layout Optimizer")
+        self.title("WFLOP by Amir Saremi")
         self.geometry("1400x850")
 
         # uniform keeps the split fixed, so the console has the same width on every tab
@@ -202,7 +202,7 @@ class OWFLOGui(ctk.CTk):
         # 2. Live Console Textbox (Read-only)
         self.console = ctk.CTkTextbox(self.output_frame, font=ctk.CTkFont(family=MONO_FONT, size=12))
         self.console.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
-        self.console.insert("0.0", "OWFLO System Initialized. Awaiting commands...\n")
+        self.console.insert("0.0", "WFLOP System Initialized. Awaiting commands...\n")
         self.console.configure(state="disabled") # Prevent user typing
 
         # 3. Global Console Action Buttons (Bottom row)
