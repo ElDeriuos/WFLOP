@@ -11,6 +11,8 @@ The program was developed for a thesis study of offshore layout design in which 
 
 The repository supports both single-objective genetic optimization (SOGA) and multi-objective NSGA-II (MOGA). It also provides a chronological wind time-series simulator for validating layouts produced by the optimizer.
 
+![WFLOP desktop app running an NSGA-II multi-objective optimization, with the live console streaming each generation](docs/images/ScreenShot-NSGA-II-section.png)
+
 > **Research scope.** WFLOP is intended for preliminary engineering studies and thesis reproducibility. Its analytical wake, fatigue, cost, and weather models are not a replacement for CFD/LES, aeroelastic, hydrodynamic, geotechnical, or bankable financial analysis.
 
 ---
